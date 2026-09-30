@@ -1,0 +1,35 @@
+# Ignored build artifacts and temp files
+node_modules/
+*.bak
+temp/
+*.log
+patch_*.js
+fix_*.js
+check_*.js
+inject_*.js
+test_*.js
+setup_*.js
+find_*.js
+bump_*.js
+append_*.js
+apply_*.js
+add_screenshots.js
+patch_xss_safe*.js
+patch_audio_safe.js
+patch_minor.js
+remove_webaudio.js
+resize.ps1
+output.css
+input.css
+package.json
+package-lock.json
+tailwind.config.js
+logo-b64.txt
+temp.js
+verify*.js
+Sonara-Radio*.zip
+"Sonara-Radio (copy).zip"
+auraradio-fixed.html
+Sonara-ShutDown.html
+logo.png
+logo-400.png
