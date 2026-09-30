@@ -75,7 +75,7 @@
             100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
         }
     </style>
-    <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
+    <script src="vendor/hls.min.js" onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js'"></script>
 
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#07080b">
@@ -98,7 +98,7 @@
                 <span class="absolute inset-y-0 left-0 flex items-center pl-4 pointer-events-none text-gray-400">
                     <i class="fa-solid fa-magnifying-glass"></i>
                 </span>
-                <input type="text" id="searchInput" placeholder="Поиск станции по названию, тегу или стране..." 
+                <input type="text" id="searchInput" placeholder="Поиск станции по названию или тегу..." 
                     class="w-full pl-11 pr-10 py-2.5 bg-dark-700/80 border border-gray-700/50 rounded-xl text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-neon-cyan focus:ring-1 focus:ring-neon-cyan transition-all shadow-inner">
                 <button id="clearSearch" class="absolute inset-y-0 right-0 pr-3.5 flex items-center text-gray-400 hover:text-white hidden">
                     <i class="fa-solid fa-circle-xmark"></i>
@@ -554,52 +554,126 @@
             try {
                 const data = await fetchApi('/countries');
                 const select = document.getElementById('countrySelect');
-                if (!select) return;
+                if (!select || !Array.isArray(data)) return;
                 
-                data.sort((a, b) => b.stationcount - a.stationcount);
+                data.sort((a, b) => safeNumber(b.stationcount) - safeNumber(a.stationcount));
                 
-                let optionsHtml = '<option value="">Все страны</option>';
+                select.replaceChildren();
+                const defaultOpt = document.createElement('option');
+                defaultOpt.value = '';
+                defaultOpt.textContent = 'Все страны';
+                select.appendChild(defaultOpt);
+
                 const topCountries = data.slice(0, 150);
                 topCountries.forEach(c => {
-                    if (c.name && c.iso_3166_1) {
-                        optionsHtml += `<option value="${c.iso_3166_1}">${c.name} (${c.stationcount})</option>`;
+                    if (c && c.name && c.iso_3166_1) {
+                        const opt = document.createElement('option');
+                        opt.value = String(c.iso_3166_1);
+                        opt.textContent = `${c.name} (${safeNumber(c.stationcount)})`;
+                        select.appendChild(opt);
                     }
                 });
-                select.innerHTML = optionsHtml;
             } catch (err) {
                 console.error('Failed to load countries list', err);
+            }
+        }
+
+        // Safe Section Title Helper (DOM XSS Protection)
+        function setSectionTitle(iconClass, text) {
+            sectionTitle.replaceChildren();
+            const icon = document.createElement('i');
+            icon.className = iconClass;
+            const span = document.createElement('span');
+            span.textContent = text;
+            sectionTitle.append(icon, span);
+        }
+
+        
+        // Storage & Validation Helpers
+        function safeNumber(value, fallback = 0) {
+            const n = Number(value);
+            return Number.isFinite(n) && n >= 0 ? n : fallback;
+        }
+
+        function validateCustomStation(s) {
+            if (!s || typeof s !== 'object') return null;
+            if (typeof s.stationuuid !== 'string' || !s.stationuuid.trim() || s.stationuuid.length > 128) return null;
+            if (typeof s.name !== 'string' || !s.name.trim() || s.name.length > 256) return null;
+            if (typeof s.url_resolved !== 'string' || !s.url_resolved.trim() || s.url_resolved.length > 2048) return null;
+            return {
+                stationuuid: s.stationuuid.trim(),
+                name: s.name.trim(),
+                url_resolved: s.url_resolved.trim(),
+                favicon: typeof s.favicon === 'string' ? s.favicon.trim() : '',
+                country: typeof s.country === 'string' ? s.country.trim() : 'Local',
+                state: typeof s.state === 'string' ? s.state.trim() : '',
+                codec: typeof s.codec === 'string' && s.codec.trim() ? s.codec.trim().toUpperCase() : 'MP3',
+                bitrate: safeNumber(s.bitrate, 128) || 128,
+                tags: typeof s.tags === 'string' ? s.tags.trim() : 'custom',
+                votes: 0,
+                clickcount: 0
+            };
+        }
+
+        function loadStringArrayFromStorage(key) {
+            try {
+                const raw = localStorage.getItem(key);
+                if (!raw) return [];
+                const parsed = JSON.parse(raw);
+                if (!Array.isArray(parsed)) return [];
+                const seen = new Set();
+                const result = [];
+                for (const item of parsed) {
+                    if (typeof item === 'string' && item.trim().length > 0 && item.trim().length <= 128) {
+                        const clean = item.trim();
+                        if (!seen.has(clean)) {
+                            seen.add(clean);
+                            result.push(clean);
+                        }
+                    }
+                }
+                return result;
+            } catch (e) {
+                console.warn('Storage read failed for ' + key, e);
+                return [];
+            }
+        }
+
+        function loadCustomStationsFromStorage(key) {
+            try {
+                const raw = localStorage.getItem(key);
+                if (!raw) return [];
+                const parsed = JSON.parse(raw);
+                if (!Array.isArray(parsed)) return [];
+                const seen = new Set();
+                const result = [];
+                for (const item of parsed) {
+                    const valid = validateCustomStation(item);
+                    if (valid && !seen.has(valid.stationuuid)) {
+                        seen.add(valid.stationuuid);
+                        result.push(valid);
+                    }
+                }
+                return result;
+            } catch (e) {
+                console.warn('Storage read failed for ' + key, e);
+                return [];
             }
         }
 
         // State Management
         let stations = [];
         let currentStation = null;
-        let favorites = (() => { try { const v = JSON.parse(localStorage.getItem('auraradio_favorites') || '[]'); return Array.isArray(v) ? v : []; } catch(e) { return []; } })();
-        let playHistory = (() => { try { const v = JSON.parse(localStorage.getItem('auraradio_playHistory') || '[]'); return Array.isArray(v) ? v : []; } catch(e) { return []; } })();
-        let customStations = (() => { try { const v = JSON.parse(localStorage.getItem('auraradio_custom') || '[]'); return Array.isArray(v) ? v : []; } catch(e) { return []; } })();
+        let favorites = loadStringArrayFromStorage('auraradio_favorites');
+        let playHistory = loadStringArrayFromStorage('auraradio_playHistory');
+        let customStations = loadCustomStationsFromStorage('auraradio_custom');
         let currentTab = 'explore';
         let currentTag = '';
         let searchTimeout = null;
-        let activeRequestId = 0;
         let isPlaying = false;
         let consecutiveStreamErrors = 0;
 
         // API Mirrors & Failover Support
-        
-        // Background mirror discovery for resilience
-        async function discoverMirrors() {
-            try {
-                const res = await fetch('https://all.api.radio-browser.info/json/servers', { signal: AbortSignal.timeout(4000) });
-                if (res.ok) {
-                    const list = await res.json();
-                    if (Array.isArray(list) && list.length > 0) {
-                        const newMirrors = list.map(s => `https://${s.name}/json`);
-                        API_MIRRORS.splice(0, API_MIRRORS.length, ...newMirrors);
-                    }
-                }
-            } catch (_) {}
-        }
-        discoverMirrors();
         const API_MIRRORS = [
             'https://de1.api.radio-browser.info/json',
             'https://nl1.api.radio-browser.info/json',
@@ -608,17 +682,14 @@
         let currentMirrorIndex = 0;
 
         async function fetchApi(path) {
-            let attempts = 0;
-            while (attempts < API_MIRRORS.length) {
-                const baseUrl = API_MIRRORS[currentMirrorIndex];
+            const mirrors = [...API_MIRRORS];
+            for (const baseUrl of mirrors) {
                 try {
                     const response = await fetch(`${baseUrl}${path}`, { signal: AbortSignal.timeout(6000) });
                     if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
                     return await response.json();
                 } catch (err) {
                     console.warn(`Mirror ${baseUrl} failed:`, err.message);
-                    currentMirrorIndex = (currentMirrorIndex + 1) % API_MIRRORS.length;
-                    attempts++;
                 }
             }
             throw new Error('All API mirrors failed');
@@ -726,6 +797,8 @@
 
             // Audio Events
             audioElement.addEventListener('playing', () => {
+                hlsNetworkRecoveryAttempts = 0;
+                hlsMediaRecoveryAttempts = 0;
                 isPlaying = true;
                 consecutiveStreamErrors = 0;
                 updatePlayButtonState();
@@ -774,9 +847,6 @@
 
         // Switch Tabs
         function switchTab(tab) {
-            clearTimeout(searchTimeout);
-            searchTimeout = null;
-            ++activeRequestId;
             currentTab = tab;
             currentTag = '';
             searchInput.value = '';
@@ -846,27 +916,10 @@
             return cname !== '' && (cname.includes(key) || (key.length > 3 && key.includes(cname)));
         }
 
-        async function filterByCountry(country) {
+        function filterByCountry(country) {
             currentCountry = country;
-            if (!country) {
-                loadStations(currentTab === 'top-voted' ? 'top-voted' : currentTab === 'random' ? 'random' : 'explore');
-                return;
-            }
-            
-            showLoading(true);
             displayedCount = 40;
-            
-            try {
-                const key = country.toLowerCase().trim();
-                const target = COUNTRY_ALIASES[key] || key;
-                
-                const data = await fetchApi(`/stations/bycountrycodeexact/${encodeURIComponent(target)}?limit=100`);
-                allLoadedStations = data.filter(s => s.url_resolved && s.name);
-                applyFilterAndSort();
-            } catch (err) {
-                console.error('Failed to load country stations:', err);
-                showError();
-            }
+            applyFilterAndSort();
         }
 
         function sortStations(sortBy) {
@@ -917,7 +970,6 @@
 
         // Load Stations from Radio Browser API
         async function loadStations(type) {
-            const reqId = ++activeRequestId;
             showLoading(true);
             currentCountry = '';
             const countrySelect = document.getElementById('countrySelect');
@@ -926,25 +978,16 @@
 
             let endpoint = `/stations/topclick/100`;
             if (type === 'top-voted') {
-                currentSort = 'votes';
                 endpoint = `/stations/topvote/100`;
             } else if (type === 'random') {
                 endpoint = `/stations/search?order=random&limit=100`;
-            } else {
-                currentSort = 'clicks';
-                endpoint = `/stations/topclick/100`;
             }
-
-            const sortSelect = document.getElementById('sortSelect');
-            if (sortSelect) sortSelect.value = currentSort;
 
             try {
                 const data = await fetchApi(endpoint);
-                if (reqId !== activeRequestId) return;
                 allLoadedStations = data.filter(s => s.url_resolved && s.name);
                 applyFilterAndSort();
             } catch (err) {
-                if (reqId !== activeRequestId) return;
                 console.error('Failed to load stations:', err);
                 showError();
             }
@@ -992,6 +1035,7 @@
 
         // Filter by Tag
         async function filterByTag(tag) {
+            const reqId = ++activeRequestId;
             currentTag = tag;
             currentTab = 'tag';
             currentCountry = '';
@@ -1008,9 +1052,11 @@
 
             try {
                 const data = await fetchApi(`/stations/bytag/${encodeURIComponent(tag)}?limit=80`);
+                if (reqId !== activeRequestId || currentTab !== 'tag') return;
                 allLoadedStations = data.filter(s => s.url_resolved && s.name);
                 applyFilterAndSort();
             } catch (err) {
+                if (reqId !== activeRequestId) return;
                 console.error('Filter by tag failed:', err);
                 showError();
             }
@@ -1019,6 +1065,7 @@
         // Load Favorites
         
         async function loadHistory() {
+            const reqId = ++activeRequestId;
             showLoading(true);
             currentTab = 'history';
             currentCountry = '';
@@ -1028,6 +1075,8 @@
             sectionSubtitle.textContent = 'История прослушиваний (последние 20)';
 
             if (playHistory.length === 0) {
+                stations = [];
+                allLoadedStations = [];
                 renderStations([]);
                 return;
             }
@@ -1040,6 +1089,7 @@
                 if (apiUuids.length > 0) {
                     data = await fetchApi(`/stations/byuuid?uuids=${apiUuids.join(',')}`);
                 }
+                if (reqId !== activeRequestId || currentTab !== 'history') return;
                 const customData = customStations.filter(s => customUuids.includes(s.stationuuid));
                 const allData = [...data, ...customData];
                 
@@ -1052,12 +1102,14 @@
                 allLoadedStations = sortedData;
                 applyFilterAndSort();
             } catch (err) {
+                if (reqId !== activeRequestId || currentTab !== 'history') return;
                 console.error('Failed to load history:', err);
                 showError();
             }
         }
 
         async function loadFavorites() {
+            const reqId = ++activeRequestId;
             if (favorites.length === 0) {
                 stations = [];
                 allLoadedStations = [];
@@ -1080,25 +1132,31 @@
                 if (apiUuids.length > 0) {
                     data = await fetchApi(`/stations/byuuid?uuids=${apiUuids.join(',')}`);
                 }
+                if (reqId !== activeRequestId || currentTab !== 'favorites') return;
                 const customData = customStations.filter(s => customUuids.includes(s.stationuuid));
                 allLoadedStations = [...data.filter(s => s.url_resolved && s.name), ...customData];
                 applyFilterAndSort();
             } catch (err) {
+                if (reqId !== activeRequestId || currentTab !== 'favorites') return;
                 console.error('Failed to load favorites:', err);
-                // Fallback: render empty or error
                 showError();
             }
         }
 
-        // Render Stations Grid
         function renderStations(list) {
             showLoading(false);
-            stationCount.textContent = `${list.length} станций`;
-
             if (!list || list.length === 0) {
+                stationCount.textContent = '0 станций';
                 stationsGrid.classList.add('hidden');
                 emptyState.classList.remove('hidden');
                 return;
+            }
+
+            const total = stations.length;
+            if (list.length < total) {
+                stationCount.textContent = `Показано ${list.length} из ${total}`;
+            } else {
+                stationCount.textContent = `${total} станций`;
             }
 
             emptyState.classList.add('hidden');
@@ -1121,16 +1179,6 @@
         }
 
         
-        
-        function setSectionTitle(iconClass, text) {
-            sectionTitle.replaceChildren();
-            const icon = document.createElement('i');
-            icon.className = iconClass;
-            const span = document.createElement('span');
-            span.textContent = text;
-            sectionTitle.append(icon, span);
-        }
-
         function escapeHTML(str) {
             if (str == null) return '';
             return String(str).replace(/[&<>"']/g, m => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[m]));
@@ -1142,7 +1190,8 @@
             const safeCountry = escapeHTML(station.country || 'World');
             const safeState = escapeHTML(station.state);
             const safeCodec = escapeHTML(station.codec || 'MP3');
-            const safeBitrate = escapeHTML(station.bitrate);
+            const numBitrate = safeNumber(station.bitrate, 0);
+            const safeBitrate = numBitrate > 0 ? numBitrate + 'k' : '';
             const safeUrl = escapeHTML(station.url_resolved);
             
             const isFav = favorites.includes(station.stationuuid);
@@ -1164,8 +1213,8 @@
                                 <h4 class="font-semibold text-sm text-white truncate" title="${safeName}">${safeName}</h4>
                                 <p class="text-xs text-gray-400 truncate mt-0.5">${safeCountry} ${safeState ? '• ' + safeState : ''}</p>
                                 <div class="flex items-center space-x-2.5 mt-1.5 text-[10px] text-gray-400/80 font-mono">
-                                    <span title="Прослушиваний / переходов"><i class="fa-solid fa-fire text-neon-pink/70 mr-1"></i>${station.clickcount ? station.clickcount.toLocaleString('ru-RU') : 0}</span>
-                                    <span title="Голосов (Рейтинг)"><i class="fa-solid fa-star text-neon-cyan/70 mr-1"></i>${station.votes ? station.votes.toLocaleString('ru-RU') : 0}</span>
+                                    <span title="Прослушиваний / переходов"><i class="fa-solid fa-fire text-neon-pink/70 mr-1"></i>${safeNumber(station.clickcount).toLocaleString('ru-RU')}</span>
+                                    <span title="Голосов (Рейтинг)"><i class="fa-solid fa-star text-neon-cyan/70 mr-1"></i>${safeNumber(station.votes).toLocaleString('ru-RU')}</span>
                                 </div>
                             </div>
                             <button onclick="toggleFavorite(this.closest('.station-card').dataset.uuid, event)" class="text-gray-500 hover:text-pink-500 transition-colors p-1" title="Избранное">
@@ -1195,6 +1244,7 @@
         }
 
         async function loadGenresList() {
+            const reqId = ++activeRequestId;
             showLoading(true);
             currentTab = 'genres-list';
             sectionTitle.innerHTML = `<i class="fa-solid fa-list-ul text-neon-purple"></i><span>Все радиостанции по жанрам</span>`;
@@ -1226,6 +1276,7 @@
                 );
                 
                 const results = await Promise.all(promises);
+                if (reqId !== activeRequestId || currentTab !== 'genres-list') return;
                 
                 for (const result of results) {
                     const genre = result.genre;
@@ -1263,123 +1314,11 @@
                 } else {
                     safelyUpdateDOM(() => { stationsGrid.innerHTML = htmlContent; });
                     stationsGrid.classList.remove('hidden');
-                    emptyState.classList.add('hidden');
                 }
             } catch (err) {
+                if (reqId !== activeRequestId || currentTab !== 'genres-list') return;
                 console.error('Failed to load genres list:', err);
                 showError();
-            }
-        }
-
-        
-        function openCustomModal() { document.getElementById('customModal').classList.remove('hidden'); }
-        function closeCustomModal() { document.getElementById('customModal').classList.add('hidden'); }
-        function saveCustomStation() {
-            const name = document.getElementById('customName').value.trim();
-            const url = document.getElementById('customUrl').value.trim();
-            if(!name || !url) return;
-            const station = {
-                stationuuid: 'custom_' + Date.now(),
-                name: name,
-                url_resolved: url,
-                country: 'Custom',
-                tags: 'custom',
-                favicon: '',
-                votes: 0,
-                clickcount: 0,
-                bitrate: 0
-            };
-            customStations.push(station);
-            localStorage.setItem('auraradio_custom', JSON.stringify(customStations));
-            
-            if (!favorites.includes(station.stationuuid)) {
-                favorites.push(station.stationuuid);
-                localStorage.setItem('auraradio_favorites', JSON.stringify(favorites));
-                updateFavCountBadge();
-            }
-            closeCustomModal();
-            document.getElementById('customName').value = '';
-            document.getElementById('customUrl').value = '';
-            showToast('Поток сохранен в Избранное!');
-            if(currentTab === 'favorites') loadFavorites();
-        }
-
-        function addToHistory(uuid) {
-            if(!uuid) return;
-            playHistory = playHistory.filter(id => id !== uuid);
-            playHistory.unshift(uuid);
-            if (playHistory.length > 20) playHistory.pop();
-            localStorage.setItem('auraradio_playHistory', JSON.stringify(playHistory));
-        }
-
-        
-        // --- Smart Equalizer (Web Audio API) ---
-        
-
-        // Play Station by UUID
-        
-        let hlsInstance = null;
-        function playStreamUrl(url) {
-            if (hlsInstance) {
-                hlsInstance.destroy();
-                hlsInstance = null;
-            }
-            
-            
-            
-            if (url.includes('.m3u8') && typeof Hls !== 'undefined' && Hls.isSupported()) {
-                hlsInstance = new Hls();
-                hlsInstance.loadSource(url);
-                hlsInstance.attachMedia(audioElement);
-                hlsInstance.on(Hls.Events.MANIFEST_PARSED, function () {
-                    audioElement.play().then(() => {
-                        isPlaying = true;
-                        updatePlayButtonState();
-                    }).catch(err => {
-                        console.error('Playback error:', err);
-                        playerStatusText.textContent = 'Ошибка воспроизведения потока';
-                    });
-                });
-                hlsInstance.on(Hls.Events.ERROR, function (event, data) {
-                    if (data.fatal) {
-                        switch(data.type) {
-                            case Hls.ErrorTypes.NETWORK_ERROR:
-                                console.error('fatal network error encountered, try to recover');
-                                hlsInstance.startLoad();
-                                break;
-                            case Hls.ErrorTypes.MEDIA_ERROR:
-                                console.error('fatal media error encountered, try to recover');
-                                hlsInstance.recoverMediaError();
-                                break;
-                            default:
-                                hlsInstance.destroy();
-                                hlsInstance = null;
-                                isPlaying = false;
-                                updatePlayButtonState();
-                                playerStatusText.textContent = 'Ошибка HLS потока';
-                                liveBadge.className = 'absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full border-2 border-dark-800 flex items-center justify-center';
-                                const eqEl = document.getElementById('equalizer');
-                                if (eqEl) eqEl.classList.add('paused-eq');
-                                if (++consecutiveStreamErrors > 5) {
-                                    playerStatusText.textContent = 'Станции недоступны';
-                                    showToast('Ни одна станция не отвечает');
-                                } else {
-                                    showToast('Поток недоступен, переключение...');
-                                    setTimeout(() => { if (stations.length > 1) playNextStation(); }, 1500);
-                                }
-                                break;
-                        }
-                    }
-                });
-            } else {
-                audioElement.src = url;
-                audioElement.play().then(() => {
-                    isPlaying = true;
-                    updatePlayButtonState();
-                }).catch(err => {
-                    console.error('Playback error:', err);
-                    playerStatusText.textContent = 'Ошибка воспроизведения потока';
-                });
             }
         }
 
@@ -1395,7 +1334,9 @@
             updateMediaSession(station);
 
             // Track click on Radio Browser API
-            fetchApi(`/url/${station.stationuuid}`).catch(e => console.log('Click track failed', e));
+            if (station && station.stationuuid && !station.stationuuid.startsWith('custom_')) {
+                fetchApi(`/url/${station.stationuuid}`).catch(e => console.log('Click track failed', e));
+            }
 
             playStreamUrl(station.url_resolved);
 
@@ -1408,7 +1349,7 @@
             playerStationMeta.textContent = `${station.country || ''} ${station.tags ? '• ' + station.tags.split(',')[0] : ''}`;
             playerFavicon.src = station.favicon && station.favicon.trim() !== '' ? station.favicon : getFallbackSVG(station.name);
             playerCodec.textContent = station.codec || 'MP3';
-            playerBitrate.textContent = station.bitrate ? station.bitrate + ' kbps' : '-- kbps';
+            const nb = safeNumber(station.bitrate, 0); playerBitrate.textContent = nb > 0 ? nb + ' kbps' : '-- kbps';
 
             const isFav = favorites.includes(station.stationuuid);
             playerFavBtn.innerHTML = `<i class="${isFav ? 'fa-solid text-pink-500' : 'fa-regular'} fa-heart"></i>`;
@@ -1656,7 +1597,6 @@
         // PC Shutdown via registered 'sonarashutdown:' protocol helper
         function triggerPcShutdown() { triggerShutdownNow(); }
         function triggerShutdownNow() {
-            // Show browser confirmation BEFORE invoking the protocol
             const confirmed = confirm(
                 'Вы уверены, что хотите выключить компьютер?\n\n' +
                 'После подтверждения запустится таймер на 30 секунд. ' +
@@ -1682,39 +1622,12 @@
         }
 
         function downloadShutdownInstaller() {
-            const batLines = [
-                '@echo off',
-                'set "APP_DIR=%LOCALAPPDATA%\\SonaraRadio\\"',
-                'if not exist "%APP_DIR%" mkdir "%APP_DIR%"',
-                'set "VBS=%APP_DIR%shutdown-now.vbs"',
-                '',
-                'reg add "HKCU\\Software\\Classes\\sonarashutdown" /ve /d "URL:Sonara Shutdown" /f >nul',
-                'reg add "HKCU\\Software\\Classes\\sonarashutdown" /v "URL Protocol" /d "" /f >nul',
-                'reg add "HKCU\\Software\\Classes\\sonarashutdown\\shell\\open\\command" /ve /t REG_SZ /d "\\"wscript.exe\\" \\"%VBS%\\"" /f >nul',
-                '',
-                '> "%VBS%" echo Set shell = CreateObject("WScript.Shell"^)',
-                '>> "%VBS%" echo Dim res',
-                '>> "%VBS%" echo res = shell.Popup("Sonara Radio: таймер сна завершён." & Chr(13) & Chr(10) & "Выключить компьютер через 30 секунд?" & Chr(13) & Chr(10) & Chr(13) & Chr(10) & "Нажмите ОК для подтверждения или Отмена для прерывания.", 25, "Sonara Radio — Автовыключение", 1)',
-                '>> "%VBS%" echo If res = 1 Then',
-                '>> "%VBS%" echo     shell.Run "shutdown /s /t 30", 0, False',
-                '>> "%VBS%" echo Else',
-                '>> "%VBS%" echo     shell.Run "shutdown /a", 0, False',
-                '>> "%VBS%" echo End If',
-                '',
-                'echo Сохраните этот файл рядом с index.html и запустите.',
-                'echo После этого Sonara Radio сможет выключать компьютер.',
-                'pause'
-            ].join('\r\n');
-            const blob = new Blob([batLines], { type: 'application/octet-stream' });
-            const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
-            a.href = url;
+            a.href = 'install-shutdown.bat';
             a.download = 'install-shutdown.bat';
             document.body.appendChild(a);
             a.click();
             a.remove();
-            setTimeout(() => URL.revokeObjectURL(url), 2000);
-            showToast('Установщик сохранён: запустите install-shutdown.bat');
         }
 
         // Reload Current View
@@ -1724,7 +1637,6 @@
             else if (currentTab === 'genres-list') loadGenresList();
             else if (currentTab === 'top-voted') loadStations('top-voted');
             else if (currentTab === 'random') loadStations('random');
-            else if (currentTab === 'history') loadHistory();
             else if (currentTab === 'tag') filterByTag(currentTag);
             else if (currentTab === 'search') searchStations(searchInput.value.trim());
         }
@@ -1791,23 +1703,18 @@
 
         // Export & Import Favorites JSON
         function exportFavorites() {
-            if (favorites.length === 0 && customStations.length === 0) {
+            if (favorites.length === 0) {
                 showToast('Список избранного пуст');
                 return;
             }
-            const backupPayload = {
-                version: 1,
-                favorites: favorites,
-                customStations: customStations
-            };
-            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(backupPayload, null, 2));
+            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(favorites, null, 2));
             const downloadAnchor = document.createElement('a');
             downloadAnchor.setAttribute("href", dataStr);
-            downloadAnchor.setAttribute("download", `sonararadio_backup_${new Date().toISOString().slice(0, 10)}.json`);
+            downloadAnchor.setAttribute("download", `sonararadio_favorites_${new Date().toISOString().slice(0, 10)}.json`);
             document.body.appendChild(downloadAnchor);
             downloadAnchor.click();
             downloadAnchor.remove();
-            showToast('Резервная копия успешно экспортирована');
+            showToast('Избранное успешно экспортировано');
         }
 
         function importFavorites(event) {
