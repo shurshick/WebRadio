@@ -4,7 +4,8 @@ const ASSETS = [
     'manifest.json',
     'logo-192.png',
     'logo-256.png',
-    'logo-512.png'
+    'logo-512.png',
+    'vendor/hls.min.js'
 ];
 
 self.addEventListener('install', event => {
