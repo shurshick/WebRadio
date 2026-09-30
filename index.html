@@ -580,10 +580,26 @@
         let currentTab = 'explore';
         let currentTag = '';
         let searchTimeout = null;
+        let activeRequestId = 0;
         let isPlaying = false;
         let consecutiveStreamErrors = 0;
 
         // API Mirrors & Failover Support
+        
+        // Background mirror discovery for resilience
+        async function discoverMirrors() {
+            try {
+                const res = await fetch('https://all.api.radio-browser.info/json/servers', { signal: AbortSignal.timeout(4000) });
+                if (res.ok) {
+                    const list = await res.json();
+                    if (Array.isArray(list) && list.length > 0) {
+                        const newMirrors = list.map(s => `https://${s.name}/json`);
+                        API_MIRRORS.splice(0, API_MIRRORS.length, ...newMirrors);
+                    }
+                }
+            } catch (_) {}
+        }
+        discoverMirrors();
         const API_MIRRORS = [
             'https://de1.api.radio-browser.info/json',
             'https://nl1.api.radio-browser.info/json',
@@ -758,6 +774,9 @@
 
         // Switch Tabs
         function switchTab(tab) {
+            clearTimeout(searchTimeout);
+            searchTimeout = null;
+            ++activeRequestId;
             currentTab = tab;
             currentTag = '';
             searchInput.value = '';
@@ -898,6 +917,7 @@
 
         // Load Stations from Radio Browser API
         async function loadStations(type) {
+            const reqId = ++activeRequestId;
             showLoading(true);
             currentCountry = '';
             const countrySelect = document.getElementById('countrySelect');
@@ -906,16 +926,25 @@
 
             let endpoint = `/stations/topclick/100`;
             if (type === 'top-voted') {
+                currentSort = 'votes';
                 endpoint = `/stations/topvote/100`;
             } else if (type === 'random') {
                 endpoint = `/stations/search?order=random&limit=100`;
+            } else {
+                currentSort = 'clicks';
+                endpoint = `/stations/topclick/100`;
             }
+
+            const sortSelect = document.getElementById('sortSelect');
+            if (sortSelect) sortSelect.value = currentSort;
 
             try {
                 const data = await fetchApi(endpoint);
+                if (reqId !== activeRequestId) return;
                 allLoadedStations = data.filter(s => s.url_resolved && s.name);
                 applyFilterAndSort();
             } catch (err) {
+                if (reqId !== activeRequestId) return;
                 console.error('Failed to load stations:', err);
                 showError();
             }
@@ -923,6 +952,7 @@
 
         // Search Stations
         async function searchStations(query) {
+            const reqId = ++activeRequestId;
             showLoading(true);
             currentTab = 'search';
             currentCountry = '';
@@ -930,14 +960,31 @@
             if (countrySelect) countrySelect.value = '';
             displayedCount = 40;
 
-            sectionTitle.innerHTML = `<i class="fa-solid fa-magnifying-glass text-neon-cyan"></i><span>Результаты поиска: "${query}"</span>`;
-            sectionSubtitle.textContent = 'Поиск по каталогу Radio Browser';
+            setSectionTitle('fa-solid fa-magnifying-glass text-neon-cyan', 'Результаты поиска: "' + query + '"');
+            sectionSubtitle.textContent = 'Поиск по названию и тегам в каталоге';
 
             try {
-                const data = await fetchApi(`/stations/search?name=${encodeURIComponent(query)}&limit=80`);
-                allLoadedStations = data.filter(s => s.url_resolved && s.name);
+                const encoded = encodeURIComponent(query);
+                const [byName, byTag] = await Promise.all([
+                    fetchApi(`/stations/search?name=${encoded}&limit=60`).catch(() => []),
+                    fetchApi(`/stations/search?tag=${encoded}&limit=40`).catch(() => [])
+                ]);
+
+                if (reqId !== activeRequestId || currentTab !== 'search') return;
+
+                const seen = new Set();
+                const combined = [];
+                for (const s of [...byName, ...byTag]) {
+                    if (s && s.stationuuid && s.url_resolved && s.name && !seen.has(s.stationuuid)) {
+                        seen.add(s.stationuuid);
+                        combined.push(s);
+                    }
+                }
+
+                allLoadedStations = combined;
                 applyFilterAndSort();
             } catch (err) {
+                if (reqId !== activeRequestId) return;
                 console.error('Search failed:', err);
                 showError();
             }
@@ -956,7 +1003,7 @@
             clearSearchBtn.classList.add('hidden');
             showLoading(true);
 
-            sectionTitle.innerHTML = `<i class="fa-solid fa-tag text-neon-pink"></i><span>Тег: #${tag}</span>`;
+            setSectionTitle('fa-solid fa-tag text-neon-pink', 'Тег: #' + tag);
             sectionSubtitle.textContent = `Радиостанции в жанре ${tag}`;
 
             try {
@@ -1074,6 +1121,16 @@
         }
 
         
+        
+        function setSectionTitle(iconClass, text) {
+            sectionTitle.replaceChildren();
+            const icon = document.createElement('i');
+            icon.className = iconClass;
+            const span = document.createElement('span');
+            span.textContent = text;
+            sectionTitle.append(icon, span);
+        }
+
         function escapeHTML(str) {
             if (str == null) return '';
             return String(str).replace(/[&<>"']/g, m => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[m]));
@@ -1094,7 +1151,7 @@
             const tags = station.tags ? station.tags.split(',').slice(0, 3).map(t => `<span class="px-1.5 py-0.5 bg-dark-600 text-gray-300 text-[10px] rounded">${escapeHTML(t.trim())}</span>`).join('') : '';
             
             return `
-                <div data-uuid="${safeUuid}" class="station-card glass-panel p-4 rounded-2xl flex flex-col justify-between transition-all hover:border-gray-600/80 hover:shadow-xl group relative ${isCurrent ? 'border-neon-cyan/60 bg-dark-700/80 shadow-lg shadow-cyan-500/10' : ''}">
+                <div data-uuid="${safeUuid}" data-name="${safeName}" class="station-card glass-panel p-4 rounded-2xl flex flex-col justify-between transition-all hover:border-gray-600/80 hover:shadow-xl group relative ${isCurrent ? 'border-neon-cyan/60 bg-dark-700/80 shadow-lg shadow-cyan-500/10' : ''}">
                     <div>
                         <div class="flex items-start justify-between space-x-3 mb-3">
                             <div class="relative w-12 h-12 flex-shrink-0">
@@ -1197,6 +1254,7 @@
                     }
                 }
 
+                allLoadedStations = allFetchedStations;
                 stations = allFetchedStations;
                 showLoading(false);
                 stationCount.textContent = `${totalCount} станций в ${mainGenres.length} жанрах`;
@@ -1295,6 +1353,20 @@
                                 break;
                             default:
                                 hlsInstance.destroy();
+                                hlsInstance = null;
+                                isPlaying = false;
+                                updatePlayButtonState();
+                                playerStatusText.textContent = 'Ошибка HLS потока';
+                                liveBadge.className = 'absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full border-2 border-dark-800 flex items-center justify-center';
+                                const eqEl = document.getElementById('equalizer');
+                                if (eqEl) eqEl.classList.add('paused-eq');
+                                if (++consecutiveStreamErrors > 5) {
+                                    playerStatusText.textContent = 'Станции недоступны';
+                                    showToast('Ни одна станция не отвечает');
+                                } else {
+                                    showToast('Поток недоступен, переключение...');
+                                    setTimeout(() => { if (stations.length > 1) playNextStation(); }, 1500);
+                                }
                                 break;
                         }
                     }
@@ -1584,12 +1656,19 @@
         // PC Shutdown via registered 'sonarashutdown:' protocol helper
         function triggerPcShutdown() { triggerShutdownNow(); }
         function triggerShutdownNow() {
+            // Show browser confirmation BEFORE invoking the protocol
+            const confirmed = confirm(
+                'Вы уверены, что хотите выключить компьютер?\n\n' +
+                'После подтверждения запустится таймер на 30 секунд. ' +
+                'Вы сможете отменить выключение через:\n  shutdown /a'
+            );
+            if (!confirmed) return;
             try {
                 window.location.href = 'sonarashutdown:now';
             } catch (err) {
                 console.error('Shutdown protocol error:', err);
             }
-            setTimeout(showShutdownModal, 400);
+            closeShutdownModal();
         }
 
         function showShutdownModal() {
@@ -1614,7 +1693,13 @@
                 'reg add "HKCU\\Software\\Classes\\sonarashutdown\\shell\\open\\command" /ve /t REG_SZ /d "\\"wscript.exe\\" \\"%VBS%\\"" /f >nul',
                 '',
                 '> "%VBS%" echo Set shell = CreateObject("WScript.Shell"^)',
-                '>> "%VBS%" echo shell.Run "shutdown /s /f /t 0", 0, False',
+                '>> "%VBS%" echo Dim res',
+                '>> "%VBS%" echo res = shell.Popup("Sonara Radio: таймер сна завершён." & Chr(13) & Chr(10) & "Выключить компьютер через 30 секунд?" & Chr(13) & Chr(10) & Chr(13) & Chr(10) & "Нажмите ОК для подтверждения или Отмена для прерывания.", 25, "Sonara Radio — Автовыключение", 1)',
+                '>> "%VBS%" echo If res = 1 Then',
+                '>> "%VBS%" echo     shell.Run "shutdown /s /t 30", 0, False',
+                '>> "%VBS%" echo Else',
+                '>> "%VBS%" echo     shell.Run "shutdown /a", 0, False',
+                '>> "%VBS%" echo End If',
                 '',
                 'echo Сохраните этот файл рядом с index.html и запустите.',
                 'echo После этого Sonara Radio сможет выключать компьютер.',
@@ -1639,6 +1724,7 @@
             else if (currentTab === 'genres-list') loadGenresList();
             else if (currentTab === 'top-voted') loadStations('top-voted');
             else if (currentTab === 'random') loadStations('random');
+            else if (currentTab === 'history') loadHistory();
             else if (currentTab === 'tag') filterByTag(currentTag);
             else if (currentTab === 'search') searchStations(searchInput.value.trim());
         }
@@ -1705,18 +1791,23 @@
 
         // Export & Import Favorites JSON
         function exportFavorites() {
-            if (favorites.length === 0) {
+            if (favorites.length === 0 && customStations.length === 0) {
                 showToast('Список избранного пуст');
                 return;
             }
-            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(favorites, null, 2));
+            const backupPayload = {
+                version: 1,
+                favorites: favorites,
+                customStations: customStations
+            };
+            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(backupPayload, null, 2));
             const downloadAnchor = document.createElement('a');
             downloadAnchor.setAttribute("href", dataStr);
-            downloadAnchor.setAttribute("download", `sonararadio_favorites_${new Date().toISOString().slice(0, 10)}.json`);
+            downloadAnchor.setAttribute("download", `sonararadio_backup_${new Date().toISOString().slice(0, 10)}.json`);
             document.body.appendChild(downloadAnchor);
             downloadAnchor.click();
             downloadAnchor.remove();
-            showToast('Избранное успешно экспортировано');
+            showToast('Резервная копия успешно экспортирована');
         }
 
         function importFavorites(event) {
