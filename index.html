@@ -232,7 +232,7 @@
                     </button>
                     <button onclick="switchTab('top-voted')" id="tabBtn-top-voted" class="w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all text-gray-400 hover:text-white hover:bg-dark-700">
                         <i class="fa-solid fa-trophy w-5 text-center text-yellow-500"></i>
-                        <span>Топ голосов</span>
+                        <span>Подборка</span>
                     </button>
                     <button onclick="switchTab('random')" id="tabBtn-random" class="w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all text-gray-400 hover:text-white hover:bg-dark-700">
                         <i class="fa-solid fa-shuffle w-5 text-center text-neon-blue"></i>
@@ -313,10 +313,8 @@
                 <div class="flex items-center space-x-2 text-xs">
                     <span class="text-gray-400"><i class="fa-solid fa-arrow-down-wide-short mr-1"></i> Сортировка:</span>
                     <select id="sortSelect" onchange="sortStations(this.value)" class="bg-dark-700 text-gray-200 border border-gray-700 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-neon-cyan">
-                        <option value="votes">По популярности (голоса)</option>
-                        <option value="clicks">По прослушиваниям</option>
-                        <option value="bitrate">По битрейту (качество)</option>
                         <option value="name">По алфавиту (А-Я)</option>
+                        <option value="bitrate">По битрейту, если известен</option>
                     </select>
                 </div>
             </div>
@@ -820,7 +818,7 @@
                 return catalog.filter(s => (!name || s.name.toLowerCase().includes(name)) && (!tag || String(s.tags || '').toLowerCase().includes(tag))).slice(0, limit);
             }
             if (path.startsWith('/stations/topclick/')) return [...catalog].sort((a, b) => (b.clickcount || 0) - (a.clickcount || 0));
-            if (path.startsWith('/stations/topvote/')) return [...catalog].sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0)).slice(0, 100);
+            if (path.startsWith('/stations/topvote/')) return catalog.filter(s => s.url_resolved.startsWith('https://')).slice(0, 100);
             return [];
         }
 
@@ -1036,7 +1034,7 @@
                 loadGenresList();
             } else if (tab === 'top-voted') {
                 sectionTitle.innerHTML = `<i class="fa-solid fa-trophy text-yellow-500"></i><span>Подборка станций</span>`;
-                sectionSubtitle.textContent = 'Станции с высоким качеством потока';
+                sectionSubtitle.textContent = 'Знакомьтесь с новыми станциями';
                 loadStations('top-voted');
             } else if (tab === 'random') {
                 sectionTitle.innerHTML = `<i class="fa-solid fa-shuffle text-neon-blue"></i><span>Случайные станции</span>`;
@@ -1049,7 +1047,7 @@
         let allLoadedStations = [];
         let displayedCount = 40;
         let currentCountry = '';
-        let currentSort = 'votes';
+        let currentSort = 'name';
 
         function filterByCountry(country) {
             currentCountry = country;
@@ -1071,7 +1069,7 @@
                 filtered = filtered.filter(s => (s.bitrate || 0) >= currentBitrate);
             }
 
-            if (currentTab !== 'history') {
+            if (currentTab !== 'history' && currentTab !== 'random') {
                 filtered.sort((a, b) => {
                     if (currentSort === 'votes') return (b.votes || 0) - (a.votes || 0);
                 if (currentSort === 'clicks') return (b.clickcount || 0) - (a.clickcount || 0);
