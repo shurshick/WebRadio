@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const Core = require('../js/sonara-core.js');
+const buildStandalone = require('../scripts/build-standalone.js');
 const root = path.join(__dirname, '..');
 const read = name => fs.readFileSync(path.join(root, name), 'utf8');
 const html = read('index.html');
@@ -61,6 +62,14 @@ async function main() {
         assert.equal(next.context.document.documentElement.dataset.theme, 'light');
         next.context.toggleTheme();
         assert.equal(next.store.get('auraradio_theme'), 'dark');
+    });
+    await test('single-file build embeds runtime dependencies', () => {
+        const portable = buildStandalone();
+        assert.match(portable, /SonaraCore = api/);
+        assert.match(portable, /data:application\/octet-stream;base64,/);
+        assert.doesNotMatch(portable, /src="(?:js\/sonara-core|vendor\/hls\.min)\.js"/);
+        assert.doesNotMatch(portable, /href="manifest\.json"|register\('sw\.js'\)/);
+        assert.match(portable, /Sonara Radio v2\.3\.2/);
     });
     await test('storage validation calls production helpers', () => {
         assert.deepEqual(Core.parseStoredStringArray('broken'), []);
