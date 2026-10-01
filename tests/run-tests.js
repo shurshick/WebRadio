@@ -91,7 +91,7 @@ async function main() {
         assert.match(portable, /data:application\/octet-stream;base64,/);
         assert.doesNotMatch(portable, /src="(?:js\/sonara-core|vendor\/hls\.min)\.js"/);
         assert.doesNotMatch(portable, /href="manifest\.json"|register\('sw\.js'\)/);
-        assert.match(portable, /Sonara Radio v2\.3\.2/);
+        assert.match(portable, /Sonara Radio v2\.3\.3/);
     });
     await test('storage validation calls production helpers', () => {
         assert.deepEqual(Core.parseStoredStringArray('broken'), []);
