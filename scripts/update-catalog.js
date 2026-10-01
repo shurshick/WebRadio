@@ -56,6 +56,8 @@ function buildCatalog(raw, updatedAt = new Date().toISOString()) {
 async function main() {
     const compressed = await download(SOURCE);
     const raw = JSON.parse(zlib.gunzipSync(compressed).toString('utf8'));
+    const sample = Array.isArray(raw) ? raw[0] : raw.stations?.[0];
+    console.log('Export record fields:', Object.keys(sample || {}).join(', '));
     const catalog = buildCatalog(raw);
     fs.mkdirSync(path.dirname(TARGET), { recursive: true });
     const temp = `${TARGET}.tmp`;
