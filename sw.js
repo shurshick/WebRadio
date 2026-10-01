@@ -1,4 +1,4 @@
-const CACHE_NAME = 'sonara-radio-v2.2';
+﻿const CACHE_NAME = 'sonara-radio-v2.3';
 const ASSETS = [
     'index.html',
     'manifest.json',
