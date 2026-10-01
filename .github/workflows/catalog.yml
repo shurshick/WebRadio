@@ -23,7 +23,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout --orphan catalog
-          git rm -r --cached -q .
+          git rm -r --cached -f -q .
           git add data/stations.json
           git commit -m "Update radio catalog"
           git push --force origin HEAD:catalog
