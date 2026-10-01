@@ -1,0 +1,106 @@
+(function (root, factory) {
+    const api = factory();
+    if (typeof module !== 'undefined' && module.exports) module.exports = api;
+    if (root) root.SonaraCore = api;
+})(typeof window !== 'undefined' ? window : globalThis, function () {
+    function safeNumber(value, fallback = 0) {
+        const n = Number(value);
+        return Number.isFinite(n) && n >= 0 ? n : fallback;
+    }
+
+    function validateFavoriteUuid(value) {
+        if (typeof value !== 'string') return null;
+        const clean = value.trim();
+        return clean && clean.length <= 128 ? clean : null;
+    }
+
+    function normalizeStringArray(input) {
+        if (!Array.isArray(input)) return [];
+        return [...new Set(input.map(validateFavoriteUuid).filter(Boolean))];
+    }
+
+    function validateCustomStation(s) {
+        if (!s || typeof s !== 'object' || Array.isArray(s)) return null;
+        const stationuuid = validateFavoriteUuid(s.stationuuid);
+        if (!stationuuid || !stationuuid.startsWith('custom_')) return null;
+        if (typeof s.name !== 'string' || !s.name.trim() || s.name.trim().length > 256) return null;
+        if (typeof s.url_resolved !== 'string' || !s.url_resolved.trim() || s.url_resolved.trim().length > 2048) return null;
+        const optional = (key, max, fallback = '') => typeof s[key] === 'string' ? s[key].trim().slice(0, max) : fallback;
+        return {
+            stationuuid, name: s.name.trim(), url_resolved: s.url_resolved.trim(),
+            favicon: optional('favicon', 2048), country: optional('country', 128, 'Local'),
+            state: optional('state', 128), codec: optional('codec', 32, 'MP3').toUpperCase(),
+            bitrate: safeNumber(s.bitrate, 128) || 128, tags: optional('tags', 512, 'custom'),
+            votes: 0, clickcount: 0
+        };
+    }
+
+    function normalizeCustomStations(input) {
+        if (!Array.isArray(input)) return [];
+        const seen = new Set();
+        return input.map(validateCustomStation).filter(station => {
+            if (!station || seen.has(station.stationuuid)) return false;
+            seen.add(station.stationuuid);
+            return true;
+        });
+    }
+
+    function parseStoredStringArray(raw) {
+        try { return normalizeStringArray(JSON.parse(raw)); } catch (_) { return []; }
+    }
+
+    function parseStoredCustomStations(raw) {
+        try { return normalizeCustomStations(JSON.parse(raw)); } catch (_) { return []; }
+    }
+
+    function createBackup(favorites, customStations) {
+        return { version: 1, favorites: normalizeStringArray(favorites), customStations: normalizeCustomStations(customStations) };
+    }
+
+    function parseBackup(raw) {
+        const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        if (Array.isArray(data)) return { favorites: normalizeStringArray(data), customStations: [], legacy: true };
+        if (!data || data.version !== 1 || !Array.isArray(data.favorites) || !Array.isArray(data.customStations)) {
+            throw new Error('Unsupported backup format');
+        }
+        return { favorites: normalizeStringArray(data.favorites), customStations: normalizeCustomStations(data.customStations), legacy: false };
+    }
+
+    const COUNTRY_ALIASES = {
+        ru: 'ru', russia: 'ru', 'russian federation': 'ru', 'россия': 'ru', 'российская федерация': 'ru',
+        us: 'us', usa: 'us', 'united states': 'us', 'united states of america': 'us',
+        de: 'de', germany: 'de', deutschland: 'de', fr: 'fr', france: 'fr', 'франция': 'fr',
+        gb: 'gb', uk: 'gb', 'united kingdom': 'gb', 'great britain': 'gb', england: 'gb', britain: 'gb',
+        it: 'it', italy: 'it', italia: 'it', 'италия': 'it', es: 'es', spain: 'es', espana: 'es', 'испания': 'es',
+        ca: 'ca', canada: 'ca', 'канада': 'ca', ua: 'ua', ukraine: 'ua', 'украина': 'ua'
+    };
+    function countryMatches(st, country) {
+        if (!country) return true;
+        const key = country.toLowerCase().trim();
+        const cc = (st.countrycode || '').toLowerCase().trim();
+        if (cc === key) return true;
+        const target = COUNTRY_ALIASES[key] || null;
+        const cname = (st.country || '').toLowerCase().trim();
+        const stationCode = (cc && COUNTRY_ALIASES[cc]) || (cname && COUNTRY_ALIASES[cname]) || null;
+        if (target && stationCode) return target === stationCode;
+        if (target) return cname !== '' && cname.includes(key);
+        return cname !== '' && (cname.includes(key) || (key.length > 3 && key.includes(cname)));
+    }
+
+    function lastStationSource(savedId, customStations) {
+        if (!savedId) return { kind: 'none' };
+        if (!savedId.startsWith('custom_')) return { kind: 'catalog', id: savedId };
+        const station = customStations.find(s => s.stationuuid === savedId);
+        return station ? { kind: 'custom', station } : { kind: 'none' };
+    }
+
+    function nextHlsRecoveryAction(type, networkAttempts, mediaAttempts) {
+        if (type === 'NETWORK_ERROR' && networkAttempts < 2) return 'RECOVER_NETWORK';
+        if (type === 'MEDIA_ERROR' && mediaAttempts < 1) return 'RECOVER_MEDIA';
+        return 'DESTROY';
+    }
+
+    return { safeNumber, validateFavoriteUuid, normalizeStringArray, validateCustomStation,
+        normalizeCustomStations, parseStoredStringArray, parseStoredCustomStations,
+        createBackup, parseBackup, countryMatches, lastStationSource, nextHlsRecoveryAction };
+});

@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="ru" class="dark">
 <head>
     <meta charset="UTF-8">
@@ -449,7 +449,7 @@
                 </div>
                 <div>
                     <h3 class="font-bold text-lg text-white">О приложении</h3>
-                    <p class="text-xs text-gray-400">Sonara Radio v2.3</p>
+                    <p class="text-xs text-gray-400">Sonara Radio v2.3.1</p>
                 </div>
             </div>
             <p class="text-sm text-gray-300 leading-relaxed mb-4">
@@ -500,8 +500,10 @@
     </div>
 
     <!-- JavaScript Application Logic -->
+    <script src="js/sonara-core.js"></script>
     <script>
-        
+        const { safeNumber, validateCustomStation, countryMatches } = SonaraCore;
+
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
                 navigator.serviceWorker.register('sw.js').catch(err => console.log('SW ref failed', err));
@@ -590,49 +592,11 @@
 
         
         // Storage & Validation Helpers
-        function safeNumber(value, fallback = 0) {
-            const n = Number(value);
-            return Number.isFinite(n) && n >= 0 ? n : fallback;
-        }
-
-        function validateCustomStation(s) {
-            if (!s || typeof s !== 'object') return null;
-            if (typeof s.stationuuid !== 'string' || !s.stationuuid.trim() || s.stationuuid.length > 128) return null;
-            if (typeof s.name !== 'string' || !s.name.trim() || s.name.length > 256) return null;
-            if (typeof s.url_resolved !== 'string' || !s.url_resolved.trim() || s.url_resolved.length > 2048) return null;
-            return {
-                stationuuid: s.stationuuid.trim(),
-                name: s.name.trim(),
-                url_resolved: s.url_resolved.trim(),
-                favicon: typeof s.favicon === 'string' ? s.favicon.trim() : '',
-                country: typeof s.country === 'string' ? s.country.trim() : 'Local',
-                state: typeof s.state === 'string' ? s.state.trim() : '',
-                codec: typeof s.codec === 'string' && s.codec.trim() ? s.codec.trim().toUpperCase() : 'MP3',
-                bitrate: safeNumber(s.bitrate, 128) || 128,
-                tags: typeof s.tags === 'string' ? s.tags.trim() : 'custom',
-                votes: 0,
-                clickcount: 0
-            };
-        }
-
         function loadStringArrayFromStorage(key) {
             try {
                 const raw = localStorage.getItem(key);
                 if (!raw) return [];
-                const parsed = JSON.parse(raw);
-                if (!Array.isArray(parsed)) return [];
-                const seen = new Set();
-                const result = [];
-                for (const item of parsed) {
-                    if (typeof item === 'string' && item.trim().length > 0 && item.trim().length <= 128) {
-                        const clean = item.trim();
-                        if (!seen.has(clean)) {
-                            seen.add(clean);
-                            result.push(clean);
-                        }
-                    }
-                }
-                return result;
+                return SonaraCore.parseStoredStringArray(raw);
             } catch (e) {
                 console.warn('Storage read failed for ' + key, e);
                 return [];
@@ -643,18 +607,7 @@
             try {
                 const raw = localStorage.getItem(key);
                 if (!raw) return [];
-                const parsed = JSON.parse(raw);
-                if (!Array.isArray(parsed)) return [];
-                const seen = new Set();
-                const result = [];
-                for (const item of parsed) {
-                    const valid = validateCustomStation(item);
-                    if (valid && !seen.has(valid.stationuuid)) {
-                        seen.add(valid.stationuuid);
-                        result.push(valid);
-                    }
-                }
-                return result;
+                return SonaraCore.parseStoredCustomStations(raw);
             } catch (e) {
                 console.warn('Storage read failed for ' + key, e);
                 return [];
@@ -670,6 +623,7 @@
         let currentTab = 'explore';
         let currentTag = '';
         let searchTimeout = null;
+        let activeRequestId = 0;
         let isPlaying = false;
         let consecutiveStreamErrors = 0;
 
@@ -742,13 +696,20 @@
 
             // Restore last station if available
             const savedStationId = localStorage.getItem('auraradio_last_station');
-            if (savedStationId) {
-                fetchApi(`/stations/byuuid/${savedStationId}`)
+            const savedSource = SonaraCore.lastStationSource(savedStationId, customStations);
+            if (savedSource.kind === 'custom') {
+                currentStation = savedSource.station;
+                updatePlayerInfo(currentStation);
+                updateMediaSession(currentStation);
+                playerStatusText.textContent = 'Готово к воспроизведению';
+            } else if (savedSource.kind === 'catalog') {
+                fetchApi(`/stations/byuuid/${encodeURIComponent(savedSource.id)}`)
                     .then(data => {
                         if (data && data.length > 0) {
                             // Don't autoplay on load, just set station info
                             currentStation = data[0];
                             updatePlayerInfo(currentStation);
+                            updateMediaSession(currentStation);
                             playerStatusText.textContent = 'Готово к воспроизведению';
                         }
                     })
@@ -797,8 +758,6 @@
 
             // Audio Events
             audioElement.addEventListener('playing', () => {
-                hlsNetworkRecoveryAttempts = 0;
-                hlsMediaRecoveryAttempts = 0;
                 isPlaying = true;
                 consecutiveStreamErrors = 0;
                 updatePlayButtonState();
@@ -847,6 +806,9 @@
 
         // Switch Tabs
         function switchTab(tab) {
+            clearTimeout(searchTimeout);
+            searchTimeout = null;
+            ++activeRequestId;
             currentTab = tab;
             currentTag = '';
             searchInput.value = '';
@@ -889,32 +851,6 @@
         let displayedCount = 40;
         let currentCountry = '';
         let currentSort = 'votes';
-
-        const COUNTRY_ALIASES = {
-            'ru': 'ru', 'russia': 'ru', 'russian federation': 'ru', 'россия': 'ru', 'российская федерация': 'ru',
-            'us': 'us', 'usa': 'us', 'united states': 'us', 'united states of america': 'us',
-            'de': 'de', 'germany': 'de', 'deutschland': 'de',
-            'fr': 'fr', 'france': 'fr', 'франция': 'fr',
-            'gb': 'gb', 'uk': 'gb', 'united kingdom': 'gb', 'great britain': 'gb', 'england': 'gb', 'britain': 'gb',
-            'it': 'it', 'italy': 'it', 'italia': 'it', 'италия': 'it',
-            'es': 'es', 'spain': 'es', 'espana': 'es', 'испания': 'es',
-            'ca': 'ca', 'canada': 'ca', 'канада': 'ca',
-            'ua': 'ua', 'ukraine': 'ua', 'украина': 'ua'
-        };
-
-        function countryMatches(st, country) {
-            if (!country) return true;
-            const key = country.toLowerCase().trim();
-            const cc = (st.countrycode || '').toLowerCase().trim();
-            if (cc === key) return true;
-            const target = COUNTRY_ALIASES[key] || null;
-            const cname = (st.country || '').toLowerCase().trim();
-            const stationCode = (cc && COUNTRY_ALIASES[cc]) || (cname && COUNTRY_ALIASES[cname]) || null;
-
-            if (target && stationCode) return target === stationCode;
-            if (target) return cname !== '' && cname.includes(key);
-            return cname !== '' && (cname.includes(key) || (key.length > 3 && key.includes(cname)));
-        }
 
         function filterByCountry(country) {
             currentCountry = country;
@@ -970,6 +906,7 @@
 
         // Load Stations from Radio Browser API
         async function loadStations(type) {
+            const reqId = ++activeRequestId;
             showLoading(true);
             currentCountry = '';
             const countrySelect = document.getElementById('countrySelect');
@@ -985,9 +922,11 @@
 
             try {
                 const data = await fetchApi(endpoint);
+                if (reqId !== activeRequestId) return;
                 allLoadedStations = data.filter(s => s.url_resolved && s.name);
                 applyFilterAndSort();
             } catch (err) {
+                if (reqId !== activeRequestId) return;
                 console.error('Failed to load stations:', err);
                 showError();
             }
@@ -1027,7 +966,7 @@
                 allLoadedStations = combined;
                 applyFilterAndSort();
             } catch (err) {
-                if (reqId !== activeRequestId) return;
+                if (reqId !== activeRequestId || currentTab !== 'search') return;
                 console.error('Search failed:', err);
                 showError();
             }
@@ -1056,7 +995,7 @@
                 allLoadedStations = data.filter(s => s.url_resolved && s.name);
                 applyFilterAndSort();
             } catch (err) {
-                if (reqId !== activeRequestId) return;
+                if (reqId !== activeRequestId || currentTab !== 'tag') return;
                 console.error('Filter by tag failed:', err);
                 showError();
             }
@@ -1319,6 +1258,60 @@
                 if (reqId !== activeRequestId || currentTab !== 'genres-list') return;
                 console.error('Failed to load genres list:', err);
                 showError();
+            }
+        }
+
+        function addToHistory(uuid) {
+            if (!uuid) return;
+            playHistory = playHistory.filter(id => id !== uuid);
+            playHistory.unshift(uuid);
+            if (playHistory.length > 20) playHistory.pop();
+            localStorage.setItem('auraradio_playHistory', JSON.stringify(playHistory));
+        }
+
+        let hlsInstance = null;
+        let hlsNetworkRecoveryAttempts = 0;
+        let hlsMediaRecoveryAttempts = 0;
+        function playStreamUrl(url) {
+            if (hlsInstance) {
+                hlsInstance.destroy();
+                hlsInstance = null;
+            }
+            hlsNetworkRecoveryAttempts = 0;
+            hlsMediaRecoveryAttempts = 0;
+            if (url.includes('.m3u8') && typeof Hls !== 'undefined' && Hls.isSupported()) {
+                const instance = new Hls();
+                hlsInstance = instance;
+                instance.loadSource(url);
+                instance.attachMedia(audioElement);
+                instance.on(Hls.Events.MANIFEST_PARSED, () => {
+                    audioElement.play().catch(err => {
+                        console.error('Playback error:', err);
+                        playerStatusText.textContent = 'Ошибка воспроизведения потока';
+                    });
+                });
+                instance.on(Hls.Events.ERROR, (_event, data) => {
+                    if (!data.fatal || hlsInstance !== instance) return;
+                    const action = SonaraCore.nextHlsRecoveryAction(
+                        data.type, hlsNetworkRecoveryAttempts, hlsMediaRecoveryAttempts);
+                    if (action === 'RECOVER_NETWORK') {
+                        hlsNetworkRecoveryAttempts++;
+                        instance.startLoad();
+                    } else if (action === 'RECOVER_MEDIA') {
+                        hlsMediaRecoveryAttempts++;
+                        instance.recoverMediaError();
+                    } else {
+                        instance.destroy();
+                        hlsInstance = null;
+                        playerStatusText.textContent = 'Ошибка воспроизведения потока';
+                    }
+                });
+            } else {
+                audioElement.src = url;
+                audioElement.play().catch(err => {
+                    console.error('Playback error:', err);
+                    playerStatusText.textContent = 'Ошибка воспроизведения потока';
+                });
             }
         }
 
@@ -1634,6 +1627,7 @@
         function reloadCurrentView() {
             if (currentTab === 'explore') loadStations('explore');
             else if (currentTab === 'favorites') loadFavorites();
+            else if (currentTab === 'history') loadHistory();
             else if (currentTab === 'genres-list') loadGenresList();
             else if (currentTab === 'top-voted') loadStations('top-voted');
             else if (currentTab === 'random') loadStations('random');
@@ -1703,18 +1697,19 @@
 
         // Export & Import Favorites JSON
         function exportFavorites() {
-            if (favorites.length === 0) {
-                showToast('Список избранного пуст');
+            if (favorites.length === 0 && customStations.length === 0) {
+                showToast('Нет данных для экспорта');
                 return;
             }
-            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(favorites, null, 2));
+            const payload = SonaraCore.createBackup(favorites, customStations);
+            const dataStr = "data:application/json;charset=utf-8," + encodeURIComponent(JSON.stringify(payload, null, 2));
             const downloadAnchor = document.createElement('a');
             downloadAnchor.setAttribute("href", dataStr);
-            downloadAnchor.setAttribute("download", `sonararadio_favorites_${new Date().toISOString().slice(0, 10)}.json`);
+            downloadAnchor.setAttribute("download", `sonararadio_backup_${new Date().toISOString().slice(0, 10)}.json`);
             document.body.appendChild(downloadAnchor);
             downloadAnchor.click();
             downloadAnchor.remove();
-            showToast('Избранное успешно экспортировано');
+            showToast('Резервная копия экспортирована');
         }
 
         function importFavorites(event) {
@@ -1723,22 +1718,17 @@
             const reader = new FileReader();
             reader.onload = function(e) {
                 try {
-                    const imported = JSON.parse(e.target.result);
-                    if (Array.isArray(imported)) {
-                        const combined = Array.from(new Set([...favorites, ...imported]));
-                        favorites = combined;
-                        localStorage.setItem('auraradio_favorites', JSON.stringify(favorites));
-                        updateFavCountBadge();
-                        if (currentTab === 'favorites') {
-                            loadFavorites();
-                        }
-                        showToast(`Импортировано станций: ${imported.length}`);
-                    } else {
-                        showToast('Неверный формат файла');
-                    }
+                    const imported = SonaraCore.parseBackup(e.target.result);
+                    favorites = SonaraCore.normalizeStringArray([...favorites, ...imported.favorites]);
+                    customStations = SonaraCore.normalizeCustomStations([...customStations, ...imported.customStations]);
+                    localStorage.setItem('auraradio_favorites', JSON.stringify(favorites));
+                    localStorage.setItem('auraradio_custom', JSON.stringify(customStations));
+                    updateFavCountBadge();
+                    reloadCurrentView();
+                    showToast(`Импортировано: ${imported.favorites.length} избранных, ${imported.customStations.length} своих станций`);
                 } catch (err) {
                     console.error('Import error:', err);
-                    showToast('Ошибка чтения JSON файла');
+                    showToast('Неверный формат JSON файла');
                 }
             };
             reader.readAsText(file);
