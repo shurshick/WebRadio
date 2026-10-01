@@ -761,9 +761,12 @@
             { stationuuid: 'builtin-deepone', name: 'Deep One', url_resolved: 'https://stream.deep1.ru/deep1mp3', tags: 'electronic,house', country: 'Russia', countrycode: 'RU', codec: 'MP3', bitrate: 128 },
             { stationuuid: 'builtin-ataman', name: 'Ataman 105.9', url_resolved: 'https://listen5.myradio24.com/ataman', tags: 'rock,oldies', country: 'Russia', countrycode: 'RU', codec: 'MP3', bitrate: 128 }
         ];
-        const CATALOG_URLS = globalThis.location?.protocol === 'file:'
-            ? ['https://raw.githubusercontent.com/shurshick/WebRadio/main/data/stations.json']
-            : [new URL('data/stations.json', globalThis.location?.href || 'https://shurshick.github.io/WebRadio/').href, 'https://raw.githubusercontent.com/shurshick/WebRadio/main/data/stations.json'];
+        const CATALOG_URLS = [
+            'https://raw.githubusercontent.com/shurshick/WebRadio/catalog/data/stations.json',
+            'https://cdn.jsdelivr.net/gh/shurshick/WebRadio@catalog/data/stations.json',
+            ...(globalThis.location?.protocol === 'file:' ? [] : [new URL('data/stations.json', globalThis.location?.href || 'https://shurshick.github.io/WebRadio/').href]),
+            'https://raw.githubusercontent.com/shurshick/WebRadio/main/data/stations.json'
+        ];
         let catalogPromise;
         async function loadStaticCatalog() {
             if (!catalogPromise) {

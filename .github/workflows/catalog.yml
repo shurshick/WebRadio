@@ -18,9 +18,12 @@ jobs:
           node-version: '20'
       - name: Download and validate catalog
         run: node scripts/update-catalog.js
-      - name: Commit only when catalog changed
+      - name: Publish snapshot without growing main history
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout --orphan catalog
+          git rm -r --cached -q .
           git add data/stations.json
-          git diff --cached --quiet || (git commit -m "Update radio catalog" && git push)
+          git commit -m "Update radio catalog"
+          git push --force origin HEAD:catalog
