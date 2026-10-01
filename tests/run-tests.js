@@ -51,16 +51,35 @@ async function main() {
         assert.equal(catalog.stations[0].favicon, 'https://example.com/icon.png');
         assert.throws(() => buildCatalog(input.slice(0, 2)), /small/);
     });
-    await test('static catalog serves search, countries and saved stations without live API', async () => {
+    await test('live API has priority over the GitHub snapshot', async () => {
+        const rt = runtime({}, url => {
+            assert(url.includes('api.radio-browser.info'));
+            return Promise.resolve({ ok: true, json: async () => [{ stationuuid: 'live', name: 'Live', url_resolved: 'https://example.com/live' }] });
+        });
+        const result = await rt.context.fetchApi('/stations/search?name=Live&limit=10');
+        assert.equal(result[0].stationuuid, 'live');
+        assert.equal(rt.requests.length, 1);
+    });
+    await test('static catalog serves search, countries and saved stations after API failure', async () => {
         const stations = Array.from({ length: 1001 }, (_, i) => ({ stationuuid: `id-${i}`, name: i === 0 ? 'Jazz One' : `Station ${i}`, url_resolved: `https://example.com/${i}`, country: 'Russia', countrycode: 'RU', tags: i === 0 ? 'jazz' : '' }));
         const rt = runtime({ auraradio_station_cache: JSON.stringify({ missing: { stationuuid: 'missing', name: 'Saved', url_resolved: 'https://example.com/saved' } }) }, url => {
-            assert(url.includes('data/stations.json'));
-            return Promise.resolve({ ok: true, json: async () => ({ stations }) });
+            return Promise.resolve(url.includes('api.radio-browser.info')
+                ? { ok: false, status: 503 }
+                : { ok: true, json: async () => ({ stations }) });
         });
         assert.equal((await rt.context.fetchApi('/stations/search?name=Jazz&limit=10')).length, 1);
         assert.equal((await rt.context.fetchApi('/countries'))[0].stationcount, 1001);
         assert.equal((await rt.context.fetchApi('/stations/byuuid?uuids=missing'))[0].name, 'Saved');
-        assert.equal(rt.requests.length, 1);
+        assert.equal(rt.requests.filter(url => url.includes('data/stations.json')).length, 1);
+        assert.equal(rt.requests.filter(url => url.includes('api.radio-browser.info')).length, 3);
+        assert(rt.requests[0].includes('api.radio-browser.info'));
+    });
+    await test('built-in stations load when API and GitHub are unavailable', async () => {
+        const rt = runtime({}, async () => ({ ok: false, status: 503 }));
+        const result = await rt.context.fetchApi('/stations/search?name=Relax');
+        assert(result.some(station => station.name === 'Relax FM'));
+        assert(rt.requests.some(url => url.includes('api.radio-browser.info')));
+        assert(rt.requests.some(url => url.includes('data/stations.json')));
     });
     await test('syntax and shared core wiring', () => {
         new vm.Script(app); new vm.Script(read('js/sonara-core.js')); new vm.Script(read('sw.js'));
@@ -91,7 +110,7 @@ async function main() {
         assert.match(portable, /data:application\/octet-stream;base64,/);
         assert.doesNotMatch(portable, /src="(?:js\/sonara-core|vendor\/hls\.min)\.js"/);
         assert.doesNotMatch(portable, /href="manifest\.json"|register\('sw\.js'\)/);
-        assert.match(portable, /Sonara Radio v2\.3\.3/);
+        assert.match(portable, /Sonara Radio v2\.3\.4/);
     });
     await test('storage validation calls production helpers', () => {
         assert.deepEqual(Core.parseStoredStringArray('broken'), []);
@@ -160,8 +179,8 @@ async function main() {
     });
     await test('actual loader rejects late Explore response after Favorites', async () => {
         let release;
-        const rt = runtime({}, url => url.includes('/data/stations.json')
-            ? new Promise(resolve => { release = () => resolve({ ok: true, json: async () => ({ stations: Array.from({ length: 1001 }, (_, i) => ({ stationuuid: String(i), name: 'Late', url_resolved: 'https://example.com' })) }) }); })
+        const rt = runtime({}, url => url.includes('/stations/topclick/')
+            ? new Promise(resolve => { release = () => resolve({ ok: true, json: async () => [{ stationuuid: 'late', name: 'Late', url_resolved: 'https://example.com' }] }); })
             : Promise.resolve({ ok: true, json: async () => [] }));
         rt.boot(); rt.context.switchTab('favorites'); release();
         await new Promise(resolve => setTimeout(resolve, 0));

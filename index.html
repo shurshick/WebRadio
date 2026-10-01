@@ -529,7 +529,7 @@
                 </div>
                 <div>
                     <h3 class="font-bold text-lg text-white">О приложении</h3>
-                    <p class="text-xs text-gray-400">Sonara Radio v2.3.3</p>
+                    <p class="text-xs text-gray-400">Sonara Radio v2.3.4</p>
                 </div>
             </div>
             <p class="text-sm text-gray-300 leading-relaxed mb-4">
@@ -751,7 +751,7 @@
         }
 
         // The static snapshot is published daily by GitHub Actions. Keep a small
-        // independent starter list inside the HTML for blocked catalog hosts.
+        // independent starter list inside the HTML if both API and catalog hosts fail.
         const BUILTIN_STATIONS = [
             { stationuuid: 'builtin-relax', name: 'Relax FM', url_resolved: 'https://ic4.101.ru:8000/stream/air/aac/64/200', tags: 'ambient,chillout', country: 'Russia', countrycode: 'RU', codec: 'AAC', bitrate: 64 },
             { stationuuid: 'builtin-anima', name: 'Anima Amoris Deep Tech House', url_resolved: 'https://amoris.sknt.ru/deeptech.mp3', tags: 'electronic,house', country: 'Russia', countrycode: 'RU', codec: 'MP3', bitrate: 128 },
@@ -822,26 +822,34 @@
             return [];
         }
 
-        // API remains an optional fallback if the static catalog host is down.
+        // Try the live API first, then the daily GitHub snapshot, then built-in stations.
         const API_MIRRORS = [
             'https://de1.api.radio-browser.info/json',
             'https://nl1.api.radio-browser.info/json',
             'https://at1.api.radio-browser.info/json'
         ];
+        let preferredApiMirror = API_MIRRORS[0];
+        let apiUnavailableUntil = 0;
         async function fetchApi(path) {
             if (path.startsWith('/url/')) return fetch(`${API_MIRRORS[0]}${path}`, { signal: AbortSignal.timeout(2500) }).then(r => r.json());
-            try { return queryCatalog(path, await loadStaticCatalog()); }
-            catch (error) { console.warn('Falling back to live API:', error); }
-            const mirrors = [...API_MIRRORS];
-            for (const baseUrl of mirrors) {
-                try {
-                    const response = await fetch(`${baseUrl}${path}`, { signal: AbortSignal.timeout(2500) });
-                    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-                    return await response.json();
-                } catch (err) {
-                    console.warn(`Mirror ${baseUrl} failed:`, err.message);
+            if (Date.now() >= apiUnavailableUntil) {
+                const mirrors = [preferredApiMirror, ...API_MIRRORS.filter(url => url !== preferredApiMirror)];
+                for (const baseUrl of mirrors) {
+                    try {
+                        const response = await fetch(`${baseUrl}${path}`, { signal: AbortSignal.timeout(2500) });
+                        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                        const data = await response.json();
+                        preferredApiMirror = baseUrl;
+                        apiUnavailableUntil = 0;
+                        return path.startsWith('/stations/byuuid') ? queryCatalog(path, data) : data;
+                    } catch (err) {
+                        console.warn(`Mirror ${baseUrl} failed:`, err.message);
+                    }
                 }
+                apiUnavailableUntil = Date.now() + 60_000;
             }
+            try { return queryCatalog(path, await loadStaticCatalog()); }
+            catch (error) { console.warn('Falling back to built-in stations:', error); }
             return queryCatalog(path, [...BUILTIN_STATIONS, ...Object.values(loadCachedStations())]);
         }
 
