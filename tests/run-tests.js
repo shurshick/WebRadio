@@ -51,6 +51,17 @@ async function main() {
         assert.equal(catalog.stations[0].favicon, 'https://example.com/icon.png');
         assert.throws(() => buildCatalog(input.slice(0, 2)), /small/);
     });
+    await test('static catalog serves search, countries and saved stations without live API', async () => {
+        const stations = Array.from({ length: 1001 }, (_, i) => ({ stationuuid: `id-${i}`, name: i === 0 ? 'Jazz One' : `Station ${i}`, url_resolved: `https://example.com/${i}`, country: 'Russia', countrycode: 'RU', tags: i === 0 ? 'jazz' : '' }));
+        const rt = runtime({ auraradio_station_cache: JSON.stringify({ missing: { stationuuid: 'missing', name: 'Saved', url_resolved: 'https://example.com/saved' } }) }, url => {
+            assert(url.includes('data/stations.json'));
+            return Promise.resolve({ ok: true, json: async () => ({ stations }) });
+        });
+        assert.equal((await rt.context.fetchApi('/stations/search?name=Jazz&limit=10')).length, 1);
+        assert.equal((await rt.context.fetchApi('/countries'))[0].stationcount, 1001);
+        assert.equal((await rt.context.fetchApi('/stations/byuuid?uuids=missing'))[0].name, 'Saved');
+        assert.equal(rt.requests.length, 1);
+    });
     await test('syntax and shared core wiring', () => {
         new vm.Script(app); new vm.Script(read('js/sonara-core.js')); new vm.Script(read('sw.js'));
         for (const pattern of [/js\/sonara-core\.js/, /SonaraCore\.createBackup/, /SonaraCore\.parseBackup/,
