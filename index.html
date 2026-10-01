@@ -232,7 +232,7 @@
                     </button>
                     <button onclick="switchTab('top-voted')" id="tabBtn-top-voted" class="w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all text-gray-400 hover:text-white hover:bg-dark-700">
                         <i class="fa-solid fa-trophy w-5 text-center text-yellow-500"></i>
-                        <span>Подборка</span>
+                        <span>Топ голосов</span>
                     </button>
                     <button onclick="switchTab('random')" id="tabBtn-random" class="w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all text-gray-400 hover:text-white hover:bg-dark-700">
                         <i class="fa-solid fa-shuffle w-5 text-center text-neon-blue"></i>
@@ -275,6 +275,7 @@
                         <span>Популярные радиостанции</span>
                     </h2>
                     <p id="sectionSubtitle" class="text-sm text-gray-400 mt-1">Каталог радиостанций</p>
+                    <p id="catalogSourceStatus" class="text-xs text-gray-500 mt-1" aria-live="polite"></p>
                 </div>
                 <div class="mt-3 sm:mt-0 flex items-center space-x-2">
                     <span id="stationCount" class="px-3 py-1 bg-dark-700 border border-gray-700 text-gray-300 text-xs rounded-xl font-medium">Загрузка...</span>
@@ -313,6 +314,8 @@
                 <div class="flex items-center space-x-2 text-xs">
                     <span class="text-gray-400"><i class="fa-solid fa-arrow-down-wide-short mr-1"></i> Сортировка:</span>
                     <select id="sortSelect" onchange="sortStations(this.value)" class="bg-dark-700 text-gray-200 border border-gray-700 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-neon-cyan">
+                        <option value="clicks">По прослушиваниям</option>
+                        <option value="votes">По голосам</option>
                         <option value="name">По алфавиту (А-Я)</option>
                         <option value="bitrate">По битрейту, если известен</option>
                     </select>
@@ -529,7 +532,7 @@
                 </div>
                 <div>
                     <h3 class="font-bold text-lg text-white">О приложении</h3>
-                    <p class="text-xs text-gray-400">Sonara Radio v2.3.4</p>
+                    <p class="text-xs text-gray-400">Sonara Radio v2.3.5</p>
                 </div>
             </div>
             <p class="text-sm text-gray-300 leading-relaxed mb-4">
@@ -766,6 +769,32 @@
             'https://raw.githubusercontent.com/shurshick/WebRadio/main/data/stations.json'
         ];
         let catalogPromise;
+        let staticRankingsUpdatedAt = null;
+        function mergeSnapshotRankings(stations, rankings) {
+            const scores = new Map();
+            if (rankings?.version === 1 && Number.isFinite(Date.parse(rankings.updatedAt)) && Array.isArray(rankings.stations)) {
+                for (const score of rankings.stations) {
+                    if (score && typeof score.stationuuid === 'string' && Number.isFinite(score.votes) && score.votes >= 0 && Number.isFinite(score.clickcount) && score.clickcount >= 0) scores.set(score.stationuuid, score);
+                }
+            }
+            return {
+                updatedAt: scores.size ? rankings.updatedAt : null,
+                stations: stations.map(station => {
+                    const score = scores.get(station.stationuuid);
+                    return { ...station, votes: score?.votes ?? null, clickcount: score?.clickcount ?? null };
+                })
+            };
+        }
+
+        function setCatalogSourceStatus(source, requestId) {
+            if (requestId !== activeRequestId) return;
+            const node = document.getElementById('catalogSourceStatus');
+            if (!node) return;
+            node.textContent = source === 'api' ? 'Radio Browser API · текущий рейтинг'
+                : source === 'static' ? (staticRankingsUpdatedAt ? `Резервный каталог · рейтинг на ${new Date(staticRankingsUpdatedAt).toLocaleDateString('ru-RU')}` : 'Резервный каталог · рейтинг недоступен')
+                : 'Локальная подборка · рейтинг недоступен';
+        }
+
         async function loadStaticCatalog() {
             if (!catalogPromise) {
                 catalogPromise = (async () => {
@@ -774,7 +803,16 @@
                             const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
                             if (!response.ok) continue;
                             const data = await response.json();
-                            if (Array.isArray(data.stations) && data.stations.length > 1000) return data.stations;
+                            if (Array.isArray(data.stations) && data.stations.length > 1000) {
+                                let rankings = null;
+                                try {
+                                    const rankResponse = await fetch(url.replace(/stations\.json$/, 'rankings.json'), { signal: AbortSignal.timeout(3000) });
+                                    if (rankResponse.ok) rankings = await rankResponse.json();
+                                } catch (error) { console.warn('Ranking snapshot unavailable:', error); }
+                                const merged = mergeSnapshotRankings(data.stations, rankings);
+                                staticRankingsUpdatedAt = merged.updatedAt;
+                                return merged.stations;
+                            }
                         } catch (error) { console.warn('Static catalog unavailable:', error); }
                     }
                     throw new Error('Static catalog unavailable');
@@ -817,8 +855,11 @@
                 }
                 return catalog.filter(s => (!name || s.name.toLowerCase().includes(name)) && (!tag || String(s.tags || '').toLowerCase().includes(tag))).slice(0, limit);
             }
-            if (path.startsWith('/stations/topclick/')) return [...catalog].sort((a, b) => (b.clickcount || 0) - (a.clickcount || 0));
-            if (path.startsWith('/stations/topvote/')) return catalog.filter(s => s.url_resolved.startsWith('https://')).slice(0, 100);
+            if (path.startsWith('/stations/topclick/')) return [...catalog].sort((a, b) => (b.clickcount ?? -1) - (a.clickcount ?? -1));
+            if (path.startsWith('/stations/topvote/')) {
+                const ranked = catalog.filter(s => s.votes != null).sort((a, b) => b.votes - a.votes);
+                return (ranked.length ? ranked : catalog.filter(s => s.url_resolved.startsWith('https://'))).slice(0, 100);
+            }
             return [];
         }
 
@@ -832,6 +873,7 @@
         let apiUnavailableUntil = 0;
         async function fetchApi(path) {
             if (path.startsWith('/url/')) return fetch(`${API_MIRRORS[0]}${path}`, { signal: AbortSignal.timeout(2500) }).then(r => r.json());
+            const requestId = activeRequestId;
             if (Date.now() >= apiUnavailableUntil) {
                 const mirrors = [preferredApiMirror, ...API_MIRRORS.filter(url => url !== preferredApiMirror)];
                 for (const baseUrl of mirrors) {
@@ -841,6 +883,7 @@
                         const data = await response.json();
                         preferredApiMirror = baseUrl;
                         apiUnavailableUntil = 0;
+                        setCatalogSourceStatus('api', requestId);
                         return path.startsWith('/stations/byuuid') ? queryCatalog(path, data) : data;
                     } catch (err) {
                         console.warn(`Mirror ${baseUrl} failed:`, err.message);
@@ -848,8 +891,13 @@
                 }
                 apiUnavailableUntil = Date.now() + 60_000;
             }
-            try { return queryCatalog(path, await loadStaticCatalog()); }
+            try {
+                const data = queryCatalog(path, await loadStaticCatalog());
+                setCatalogSourceStatus('static', requestId);
+                return data;
+            }
             catch (error) { console.warn('Falling back to built-in stations:', error); }
+            setCatalogSourceStatus('local', requestId);
             return queryCatalog(path, [...BUILTIN_STATIONS, ...Object.values(loadCachedStations())]);
         }
 
@@ -1055,7 +1103,7 @@
         let allLoadedStations = [];
         let displayedCount = 40;
         let currentCountry = '';
-        let currentSort = 'name';
+        let currentSort = 'clicks';
 
         function filterByCountry(country) {
             currentCountry = country;
@@ -1079,8 +1127,8 @@
 
             if (currentTab !== 'history' && currentTab !== 'random') {
                 filtered.sort((a, b) => {
-                    if (currentSort === 'votes') return (b.votes || 0) - (a.votes || 0);
-                if (currentSort === 'clicks') return (b.clickcount || 0) - (a.clickcount || 0);
+                    if (currentSort === 'votes') return (b.votes ?? -1) - (a.votes ?? -1);
+                if (currentSort === 'clicks') return (b.clickcount ?? -1) - (a.clickcount ?? -1);
                 if (currentSort === 'bitrate') return (b.bitrate || 0) - (a.bitrate || 0);
                 if (currentSort === 'name') return (a.name || '').localeCompare(b.name || '');
                 return 0;
@@ -1124,11 +1172,21 @@
             } else if (type === 'random') {
                 endpoint = `/stations/search?order=random&limit=100`;
             }
+            if (type !== 'random') {
+                currentSort = type === 'top-voted' ? 'votes' : 'clicks';
+                const sortSelect = document.getElementById('sortSelect');
+                if (sortSelect) sortSelect.value = currentSort;
+            }
 
             try {
                 const data = await fetchApi(endpoint);
                 if (reqId !== activeRequestId) return;
                 allLoadedStations = data.filter(s => s.url_resolved && s.name);
+                if (type !== 'random') {
+                    const ranked = allLoadedStations.some(s => type === 'top-voted' ? s.votes != null : s.clickcount != null);
+                    setSectionTitle(type === 'top-voted' ? 'fa-solid fa-trophy text-yellow-500' : 'fa-solid fa-fire text-neon-cyan', ranked ? (type === 'top-voted' ? 'Топ голосов' : 'Популярные радиостанции') : (type === 'top-voted' ? 'Подборка станций' : 'Каталог радиостанций'));
+                    sectionSubtitle.textContent = ranked ? 'Рейтинг Radio Browser' : 'Поиск и фильтры по доступному каталогу';
+                }
                 applyFilterAndSort();
             } catch (err) {
                 if (reqId !== activeRequestId) return;
@@ -1357,8 +1415,8 @@
                                 <h4 class="font-semibold text-sm text-white truncate" title="${safeName}">${safeName}</h4>
                                 <p class="text-xs text-gray-400 truncate mt-0.5">${safeCountry} ${safeState ? '• ' + safeState : ''}</p>
                                 <div class="flex items-center space-x-2.5 mt-1.5 text-[10px] text-gray-400/80 font-mono">
-                                    <span title="Прослушиваний / переходов"><i class="fa-solid fa-fire text-neon-pink/70 mr-1"></i>${safeNumber(station.clickcount).toLocaleString('ru-RU')}</span>
-                                    <span title="Голосов (Рейтинг)"><i class="fa-solid fa-star text-neon-cyan/70 mr-1"></i>${safeNumber(station.votes).toLocaleString('ru-RU')}</span>
+                                    <span title="Прослушиваний / переходов"><i class="fa-solid fa-fire text-neon-pink/70 mr-1"></i>${station.clickcount == null ? '—' : safeNumber(station.clickcount).toLocaleString('ru-RU')}</span>
+                                    <span title="Голосов (Рейтинг)"><i class="fa-solid fa-star text-neon-cyan/70 mr-1"></i>${station.votes == null ? '—' : safeNumber(station.votes).toLocaleString('ru-RU')}</span>
                                 </div>
                             </div>
                             <button onclick="toggleFavorite(this.closest('.station-card').dataset.uuid, event)" class="text-gray-500 hover:text-pink-500 transition-colors p-1" title="Избранное">

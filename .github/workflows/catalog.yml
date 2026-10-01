@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: radio-catalog-update
+  cancel-in-progress: false
+
 jobs:
   update:
     runs-on: ubuntu-latest
@@ -16,6 +20,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+      - name: Restore the previous ranking snapshot
+        run: |
+          if git fetch --depth=1 origin catalog; then
+            if git show FETCH_HEAD:data/rankings.json > data/rankings.previous.json; then
+              mv data/rankings.previous.json data/rankings.json
+            else
+              rm -f data/rankings.previous.json
+            fi
+          fi
       - name: Download and validate catalog
         run: node scripts/update-catalog.js
       - name: Publish snapshot without growing main history
@@ -25,5 +38,6 @@ jobs:
           git checkout --orphan catalog
           git rm -r --cached -f -q .
           git add data/stations.json
+          if [ -f data/rankings.json ]; then git add data/rankings.json; fi
           git commit -m "Update radio catalog"
           git push --force origin HEAD:catalog

@@ -5,10 +5,12 @@ const zlib = require('node:zlib');
 
 const SOURCE = 'https://backups.radio-browser.info/radiobrowser_stations_latest.json.gz';
 const TARGET = path.join(__dirname, '..', 'data', 'stations.json');
+const RANKINGS_TARGET = path.join(__dirname, '..', 'data', 'rankings.json');
+const API_MIRRORS = ['de1', 'nl1', 'at1'].map(host => `https://${host}.api.radio-browser.info/json`);
 
-function download(url) {
+function download(url, timeout = 120000) {
     return new Promise((resolve, reject) => {
-        https.get(url, { timeout: 120000 }, response => {
+        const request = https.get(url, { headers: { 'User-Agent': 'SonaraRadio-Catalog/2.3.5' } }, response => {
             if (response.statusCode !== 200) {
                 response.resume();
                 reject(new Error(`Catalog download failed: HTTP ${response.statusCode}`));
@@ -18,10 +20,53 @@ function download(url) {
             response.on('data', chunk => chunks.push(chunk));
             response.on('end', () => resolve(Buffer.concat(chunks)));
             response.on('error', reject);
-        }).on('error', reject).on('timeout', function () {
-            this.destroy(new Error('Catalog download timed out'));
-        });
+        }).on('error', reject);
+        const timer = setTimeout(() => request.destroy(new Error('Download timed out')), timeout);
+        request.on('close', () => clearTimeout(timer));
     });
+}
+
+function buildRankings(byClicks, byVotes, updatedAt = new Date().toISOString()) {
+    const scores = new Map();
+    function collect(list) {
+        if (!Array.isArray(list) || list.length === 0) throw new Error('Empty ranking response');
+        const ids = [];
+        const seen = new Set();
+        for (const station of list) {
+            const id = station.stationuuid;
+            const votes = Number(station.votes);
+            const clickcount = Number(station.clickcount);
+            if (typeof id !== 'string' || !id || station.votes == null || station.clickcount == null || !Number.isFinite(votes) || !Number.isFinite(clickcount) || votes < 0 || clickcount < 0) {
+                throw new Error('Invalid ranking record');
+            }
+            scores.set(id, { stationuuid: id, votes, clickcount });
+            if (!seen.has(id)) ids.push(id);
+            seen.add(id);
+        }
+        return ids;
+    }
+    const topClicks = collect(byClicks);
+    const topVotes = collect(byVotes);
+    return { version: 1, updatedAt, topClicks, topVotes, stations: [...scores.values()] };
+}
+
+async function fetchRankings(request = download) {
+    for (const base of API_MIRRORS) {
+        try {
+            const responses = await Promise.all([
+                request(`${base}/stations/topclick/1000?hidebroken=true`, 15000),
+                request(`${base}/stations/topvote/1000?hidebroken=true`, 15000)
+            ]);
+            return buildRankings(...responses.map(buffer => JSON.parse(buffer.toString('utf8'))));
+        } catch (error) { console.warn(`Ranking mirror ${base} failed: ${error.message}`); }
+    }
+    throw new Error('All ranking mirrors failed; keeping the previous snapshot');
+}
+
+function writeJson(target, value) {
+    const temp = `${target}.tmp`;
+    fs.writeFileSync(temp, JSON.stringify(value));
+    fs.renameSync(temp, target);
 }
 
 function buildCatalog(raw, updatedAt = new Date().toISOString()) {
@@ -59,16 +104,22 @@ function buildCatalog(raw, updatedAt = new Date().toISOString()) {
     return { updatedAt, stations };
 }
 
-async function main() {
-    const compressed = await download(SOURCE);
+async function main(request = download, targets = { catalog: TARGET, rankings: RANKINGS_TARGET }) {
+    const compressed = await request(SOURCE);
     const raw = JSON.parse(zlib.gunzipSync(compressed).toString('utf8'));
     const catalog = buildCatalog(raw);
-    fs.mkdirSync(path.dirname(TARGET), { recursive: true });
-    const temp = `${TARGET}.tmp`;
-    fs.writeFileSync(temp, JSON.stringify(catalog));
-    fs.renameSync(temp, TARGET);
-    console.log(`Saved ${catalog.stations.length} stations to ${TARGET}`);
+    fs.mkdirSync(path.dirname(targets.catalog), { recursive: true });
+    writeJson(targets.catalog, catalog);
+    console.log(`Saved ${catalog.stations.length} stations to ${targets.catalog}`);
+    try {
+        const rankings = await fetchRankings(request);
+        writeJson(targets.rankings, rankings);
+        console.log(`Saved ${rankings.stations.length} rating records, updated ${rankings.updatedAt}`);
+    } catch (error) {
+        console.warn(error.message);
+        if (fs.existsSync(targets.rankings)) console.log(`Retained ratings dated ${JSON.parse(fs.readFileSync(targets.rankings, 'utf8')).updatedAt}`);
+    }
 }
 
 if (require.main === module) main().catch(error => { console.error(error); process.exitCode = 1; });
-module.exports = { buildCatalog };
+module.exports = { buildCatalog, buildRankings, fetchRankings, main };

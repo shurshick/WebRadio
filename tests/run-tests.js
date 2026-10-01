@@ -4,7 +4,8 @@ const path = require('node:path');
 const vm = require('node:vm');
 const Core = require('../js/sonara-core.js');
 const buildStandalone = require('../scripts/build-standalone.js');
-const { buildCatalog } = require('../scripts/update-catalog.js');
+const { buildCatalog, buildRankings, main: updateCatalog } = require('../scripts/update-catalog.js');
+const { gzipSync } = require('node:zlib');
 const root = path.join(__dirname, '..');
 const read = name => fs.readFileSync(path.join(root, name), 'utf8');
 const html = read('index.html');
@@ -60,6 +61,58 @@ async function main() {
         assert.equal(result[0].stationuuid, 'live');
         assert.equal(rt.requests.length, 1);
     });
+    await test('ranking export merges UUIDs, preserves real zero and rejects missing scores', () => {
+        const a = { stationuuid: 'a', votes: 0, clickcount: 12 };
+        const b = { stationuuid: 'b', votes: 50, clickcount: 0 };
+        const result = buildRankings([a, b], [b, a], '2026-10-01T00:00:00Z');
+        assert.equal(result.stations.length, 2);
+        assert.deepEqual(result.topVotes, ['b', 'a']);
+        assert.equal(result.stations[0].votes, 0);
+        assert.throws(() => buildRankings([], [b]), /Empty/);
+        assert.throws(() => buildRankings([{ stationuuid: 'bad' }], [b]), /Invalid/);
+    });
+    await test('failed rating refresh keeps previous snapshot and date while updating catalog', async () => {
+        const folder = fs.mkdtempSync(path.join(root, '..', 'ranking-test-'));
+        const targets = { catalog: path.join(folder, 'stations.json'), rankings: path.join(folder, 'rankings.json') };
+        const previous = JSON.stringify(buildRankings([{ stationuuid: 'a', votes: 0, clickcount: 1 }], [{ stationuuid: 'a', votes: 0, clickcount: 1 }], '2026-09-30T00:00:00Z'));
+        fs.writeFileSync(targets.rankings, previous);
+        try {
+            const raw = Array.from({ length: 1001 }, (_, i) => ({ stationuuid: String(i), name: 'Radio', url_stream: `https://example.com/${i}` }));
+            await updateCatalog(async url => {
+                if (url.endsWith('.gz')) return gzipSync(JSON.stringify(raw));
+                throw new Error('API unavailable');
+            }, targets);
+            assert.equal(fs.readFileSync(targets.rankings, 'utf8'), previous);
+            assert.equal(JSON.parse(fs.readFileSync(targets.catalog)).stations.length, 1001);
+        } finally {
+            for (const file of Object.values(targets)) if (fs.existsSync(file)) fs.unlinkSync(file);
+            fs.rmdirSync(folder);
+        }
+    });
+    await test('GitHub ratings order top votes and keep unranked stations distinct from zero', async () => {
+        const stations = Array.from({ length: 1001 }, (_, i) => ({ stationuuid: `id-${i}`, name: `Radio ${i}`, url_resolved: `https://example.com/${i}` }));
+        const rankings = buildRankings([
+            { stationuuid: 'id-1', votes: 50, clickcount: 90 },
+            { stationuuid: 'id-2', votes: 100, clickcount: 20 },
+            { stationuuid: 'id-3', votes: 0, clickcount: 0 }
+        ], [
+            { stationuuid: 'id-2', votes: 100, clickcount: 20 },
+            { stationuuid: 'id-1', votes: 50, clickcount: 90 },
+            { stationuuid: 'id-3', votes: 0, clickcount: 0 }
+        ], '2026-10-01T00:00:00Z');
+        const rt = runtime({}, async url => url.includes('api.radio-browser.info') ? { ok: false, status: 503 } : { ok: true, json: async () => url.endsWith('rankings.json') ? rankings : { stations } });
+        const top = await rt.context.fetchApi('/stations/topvote/100');
+        assert.deepEqual(Array.from(top, s => s.stationuuid), ['id-2', 'id-1', 'id-3']);
+        const all = await rt.context.fetchApi('/stations/topclick/100');
+        assert.equal(all[0].stationuuid, 'id-1');
+        assert.equal(all.find(s => s.stationuuid === 'id-0').votes, null);
+        assert.equal(all.find(s => s.stationuuid === 'id-3').votes, 0);
+        assert.match(rt.nodes.get('catalogSourceStatus').textContent, /рейтинг на/);
+        rt.context.switchTab('top-voted');
+        await new Promise(resolve => setTimeout(resolve, 0));
+        assert.equal(vm.runInContext('stations[0].stationuuid', rt.context), 'id-2');
+        assert.equal(rt.nodes.get('sortSelect').value, 'votes');
+    });
     await test('static catalog serves search, countries and saved stations after API failure', async () => {
         const stations = Array.from({ length: 1001 }, (_, i) => ({ stationuuid: `id-${i}`, name: i === 0 ? 'Jazz One' : `Station ${i}`, url_resolved: `https://example.com/${i}`, country: 'Russia', countrycode: 'RU', tags: i === 0 ? 'jazz' : '' }));
         const rt = runtime({ auraradio_station_cache: JSON.stringify({ missing: { stationuuid: 'missing', name: 'Saved', url_resolved: 'https://example.com/saved' } }) }, url => {
@@ -110,7 +163,7 @@ async function main() {
         assert.match(portable, /data:application\/octet-stream;base64,/);
         assert.doesNotMatch(portable, /src="(?:js\/sonara-core|vendor\/hls\.min)\.js"/);
         assert.doesNotMatch(portable, /href="manifest\.json"|register\('sw\.js'\)/);
-        assert.match(portable, /Sonara Radio v2\.3\.4/);
+        assert.match(portable, /Sonara Radio v2\.3\.5/);
     });
     await test('storage validation calls production helpers', () => {
         assert.deepEqual(Core.parseStoredStringArray('broken'), []);
