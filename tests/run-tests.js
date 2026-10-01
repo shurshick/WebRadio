@@ -4,6 +4,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const Core = require('../js/sonara-core.js');
 const buildStandalone = require('../scripts/build-standalone.js');
+const { buildCatalog } = require('../scripts/update-catalog.js');
 const root = path.join(__dirname, '..');
 const read = name => fs.readFileSync(path.join(root, name), 'utf8');
 const html = read('index.html');
@@ -32,7 +33,7 @@ function runtime(storageData = {}, fetchImpl = async () => ({ ok: true, json: as
     const context = vm.createContext({ SonaraCore: Core, document, window, localStorage, navigator: {},
         console: { log() {}, warn() {}, error() {} },
         fetch: (...args) => { requests.push(args[0]); return fetchImpl(...args); },
-        AbortSignal, setTimeout, clearTimeout, setInterval, clearInterval, Date, Math,
+        AbortSignal, URL, setTimeout, clearTimeout, setInterval, clearInterval, Date, Math,
         btoa: str => Buffer.from(str, 'binary').toString('base64'), encodeURIComponent, unescape,
         FileReader: class { readAsText(file) { this.onload({ target: { result: file.text } }); } } });
     vm.runInContext(app, context, { filename: 'index.html' });
@@ -40,6 +41,14 @@ function runtime(storageData = {}, fetchImpl = async () => ({ ok: true, json: as
 }
 
 async function main() {
+    await test('catalog export keeps valid playable stations and rejects incomplete snapshots', () => {
+        const input = Array.from({ length: 1001 }, (_, i) => ({ stationuuid: `id-${i}`, name: `Station ${i}`, url: `https://example.com/${i}`, countrycode: 'RU', lastcheckok: true }));
+        input.push({ ...input[0] }, { stationuuid: 'broken', name: 'Broken', url: 'javascript:alert(1)' });
+        const catalog = buildCatalog(input, '2026-10-01T00:00:00Z');
+        assert.equal(catalog.stations.length, 1001);
+        assert.equal(catalog.stations[0].url_resolved, 'https://example.com/0');
+        assert.throws(() => buildCatalog(input.slice(0, 2)), /small/);
+    });
     await test('syntax and shared core wiring', () => {
         new vm.Script(app); new vm.Script(read('js/sonara-core.js')); new vm.Script(read('sw.js'));
         for (const pattern of [/js\/sonara-core\.js/, /SonaraCore\.createBackup/, /SonaraCore\.parseBackup/,
@@ -138,8 +147,8 @@ async function main() {
     });
     await test('actual loader rejects late Explore response after Favorites', async () => {
         let release;
-        const rt = runtime({}, url => url.includes('/stations/topclick/')
-            ? new Promise(resolve => { release = () => resolve({ ok: true, json: async () => [{ stationuuid: 'late', name: 'Late', url_resolved: 'https://example.com' }] }); })
+        const rt = runtime({}, url => url.includes('/data/stations.json')
+            ? new Promise(resolve => { release = () => resolve({ ok: true, json: async () => ({ stations: Array.from({ length: 1001 }, (_, i) => ({ stationuuid: String(i), name: 'Late', url_resolved: 'https://example.com' })) }) }); })
             : Promise.resolve({ ok: true, json: async () => [] }));
         rt.boot(); rt.context.switchTab('favorites'); release();
         await new Promise(resolve => setTimeout(resolve, 0));

@@ -274,7 +274,7 @@
                         <i class="fa-solid fa-fire text-neon-cyan"></i>
                         <span>Популярные радиостанции</span>
                     </h2>
-                    <p id="sectionSubtitle" class="text-sm text-gray-400 mt-1">Топ радиостанций по количеству прослушиваний онлайн</p>
+                    <p id="sectionSubtitle" class="text-sm text-gray-400 mt-1">Каталог радиостанций</p>
                 </div>
                 <div class="mt-3 sm:mt-0 flex items-center space-x-2">
                     <span id="stationCount" class="px-3 py-1 bg-dark-700 border border-gray-700 text-gray-300 text-xs rounded-xl font-medium">Загрузка...</span>
@@ -730,26 +730,118 @@
         let isPlaying = false;
         let consecutiveStreamErrors = 0;
 
-        // API Mirrors & Failover Support
+        function loadCachedStations() {
+            try {
+                const value = JSON.parse(localStorage.getItem('auraradio_station_cache') || '{}');
+                return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+            } catch { return {}; }
+        }
+
+        function cacheStation(station) {
+            if (!station?.stationuuid || !station.name || !station.url_resolved) return;
+            try {
+                const cache = loadCachedStations();
+                cache[station.stationuuid] = {
+                    stationuuid: station.stationuuid, name: station.name, url_resolved: station.url_resolved,
+                    favicon: station.favicon || '', tags: station.tags || '', country: station.country || '',
+                    countrycode: station.countrycode || '', codec: station.codec || '', bitrate: station.bitrate || 0
+                };
+                const ids = Object.keys(cache);
+                for (const id of ids.slice(0, Math.max(0, ids.length - 200))) delete cache[id];
+                localStorage.setItem('auraradio_station_cache', JSON.stringify(cache));
+            } catch (error) { console.warn('Could not cache station:', error); }
+        }
+
+        // The static snapshot is published daily by GitHub Actions. Keep a small
+        // independent starter list inside the HTML for blocked catalog hosts.
+        const BUILTIN_STATIONS = [
+            { stationuuid: 'builtin-relax', name: 'Relax FM', url_resolved: 'https://ic4.101.ru:8000/stream/air/aac/64/200', tags: 'ambient,chillout', country: 'Russia', countrycode: 'RU', codec: 'AAC', bitrate: 64 },
+            { stationuuid: 'builtin-anima', name: 'Anima Amoris Deep Tech House', url_resolved: 'https://amoris.sknt.ru/deeptech.mp3', tags: 'electronic,house', country: 'Russia', countrycode: 'RU', codec: 'MP3', bitrate: 128 },
+            { stationuuid: 'builtin-buryad', name: 'Buryad FM', url_resolved: 'https://buryadfm.hostingradio.ru:8018/buryadfm128.mp3', tags: 'folk,world', country: 'Russia', countrycode: 'RU', codec: 'MP3', bitrate: 128 },
+            { stationuuid: 'builtin-deepone', name: 'Deep One', url_resolved: 'https://stream.deep1.ru/deep1mp3', tags: 'electronic,house', country: 'Russia', countrycode: 'RU', codec: 'MP3', bitrate: 128 },
+            { stationuuid: 'builtin-ataman', name: 'Ataman 105.9', url_resolved: 'https://listen5.myradio24.com/ataman', tags: 'rock,oldies', country: 'Russia', countrycode: 'RU', codec: 'MP3', bitrate: 128 }
+        ];
+        const CATALOG_URLS = globalThis.location?.protocol === 'file:'
+            ? ['https://raw.githubusercontent.com/shurshick/WebRadio/main/data/stations.json']
+            : [new URL('data/stations.json', globalThis.location?.href || 'https://shurshick.github.io/WebRadio/').href, 'https://raw.githubusercontent.com/shurshick/WebRadio/main/data/stations.json'];
+        let catalogPromise;
+        async function loadStaticCatalog() {
+            if (!catalogPromise) {
+                catalogPromise = (async () => {
+                    for (const url of CATALOG_URLS) {
+                        try {
+                            const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
+                            if (!response.ok) continue;
+                            const data = await response.json();
+                            if (Array.isArray(data.stations) && data.stations.length > 1000) return data.stations;
+                        } catch (error) { console.warn('Static catalog unavailable:', error); }
+                    }
+                    throw new Error('Static catalog unavailable');
+                })();
+            }
+            return catalogPromise;
+        }
+
+        function queryCatalog(path, catalog) {
+            if (path === '/countries') {
+                const counts = new Map();
+                for (const s of catalog) {
+                    if (!s.countrycode) continue;
+                    const item = counts.get(s.countrycode) || { name: s.country || s.countrycode, iso_3166_1: s.countrycode, stationcount: 0 };
+                    item.stationcount++;
+                    counts.set(s.countrycode, item);
+                }
+                return [...counts.values()];
+            }
+            if (path.startsWith('/stations/byuuid')) {
+                const url = new URL(path, 'https://catalog.local');
+                const ids = url.searchParams.get('uuids')?.split(',') || (url.pathname.split('/')[3] ? [decodeURIComponent(url.pathname.split('/')[3])] : []);
+                const found = new Map(catalog.filter(s => ids.includes(s.stationuuid)).map(s => [s.stationuuid, s]));
+                const cache = loadCachedStations();
+                return ids.map(id => found.get(id) || cache[id]).filter(Boolean);
+            }
+            if (path.startsWith('/stations/bytag/')) {
+                const tag = decodeURIComponent(path.split('?')[0].split('/')[3] || '').toLowerCase();
+                const limit = Number(new URL(path, 'https://catalog.local').searchParams.get('limit')) || 80;
+                return catalog.filter(s => String(s.tags || '').toLowerCase().split(',').some(t => t.trim().includes(tag))).slice(0, limit);
+            }
+            if (path.startsWith('/stations/search')) {
+                const params = new URL(path, 'https://catalog.local').searchParams;
+                const name = (params.get('name') || '').toLowerCase();
+                const tag = (params.get('tag') || '').toLowerCase();
+                const limit = Number(params.get('limit')) || 100;
+                if (params.get('order') === 'random') {
+                    const start = Math.floor(Math.random() * Math.max(1, catalog.length - limit));
+                    return catalog.slice(start, start + limit);
+                }
+                return catalog.filter(s => (!name || s.name.toLowerCase().includes(name)) && (!tag || String(s.tags || '').toLowerCase().includes(tag))).slice(0, limit);
+            }
+            if (path.startsWith('/stations/topclick/')) return [...catalog].sort((a, b) => (b.clickcount || 0) - (a.clickcount || 0));
+            if (path.startsWith('/stations/topvote/')) return [...catalog].sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0)).slice(0, 100);
+            return [];
+        }
+
+        // API remains an optional fallback if the static catalog host is down.
         const API_MIRRORS = [
             'https://de1.api.radio-browser.info/json',
             'https://nl1.api.radio-browser.info/json',
             'https://at1.api.radio-browser.info/json'
         ];
-        let currentMirrorIndex = 0;
-
         async function fetchApi(path) {
+            if (path.startsWith('/url/')) return fetch(`${API_MIRRORS[0]}${path}`, { signal: AbortSignal.timeout(2500) }).then(r => r.json());
+            try { return queryCatalog(path, await loadStaticCatalog()); }
+            catch (error) { console.warn('Falling back to live API:', error); }
             const mirrors = [...API_MIRRORS];
             for (const baseUrl of mirrors) {
                 try {
-                    const response = await fetch(`${baseUrl}${path}`, { signal: AbortSignal.timeout(6000) });
+                    const response = await fetch(`${baseUrl}${path}`, { signal: AbortSignal.timeout(2500) });
                     if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
                     return await response.json();
                 } catch (err) {
                     console.warn(`Mirror ${baseUrl} failed:`, err.message);
                 }
             }
-            throw new Error('All API mirrors failed');
+            return queryCatalog(path, [...BUILTIN_STATIONS, ...Object.values(loadCachedStations())]);
         }
 
         // DOM Elements
@@ -928,8 +1020,8 @@
             }
 
             if (tab === 'explore') {
-                sectionTitle.innerHTML = `<i class="fa-solid fa-fire text-neon-cyan"></i><span>Популярные радиостанции</span>`;
-                sectionSubtitle.textContent = 'Топ радиостанций по количеству прослушиваний онлайн';
+                sectionTitle.innerHTML = `<i class="fa-solid fa-fire text-neon-cyan"></i><span>Каталог радиостанций</span>`;
+                sectionSubtitle.textContent = 'Поиск и фильтры по полному каталогу';
                 loadStations('explore');
             } else if (tab === 'history') {
                 loadHistory();
@@ -940,8 +1032,8 @@
             } else if (tab === 'genres-list') {
                 loadGenresList();
             } else if (tab === 'top-voted') {
-                sectionTitle.innerHTML = `<i class="fa-solid fa-trophy text-yellow-500"></i><span>Топ по голосам</span>`;
-                sectionSubtitle.textContent = 'Самые высоко оцененные радиостанции пользователями';
+                sectionTitle.innerHTML = `<i class="fa-solid fa-trophy text-yellow-500"></i><span>Подборка станций</span>`;
+                sectionSubtitle.textContent = 'Станции с высоким качеством потока';
                 loadStations('top-voted');
             } else if (tab === 'random') {
                 sectionTitle.innerHTML = `<i class="fa-solid fa-shuffle text-neon-blue"></i><span>Случайные станции</span>`;
@@ -1423,6 +1515,7 @@
             const station = stations.find(s => s.stationuuid === uuid) || currentStation;
             if(station) addToHistory(station.stationuuid);
             if (!station) return;
+            cacheStation(station);
 
             currentStation = station;
             localStorage.setItem('auraradio_last_station', station.stationuuid);
@@ -1431,7 +1524,7 @@
             updateMediaSession(station);
 
             // Track click on Radio Browser API
-            if (station && station.stationuuid && !station.stationuuid.startsWith('custom_')) {
+            if (station && station.stationuuid && !station.stationuuid.startsWith('custom_') && !station.stationuuid.startsWith('builtin-')) {
                 fetchApi(`/url/${station.stationuuid}`).catch(e => console.log('Click track failed', e));
             }
 
@@ -1519,6 +1612,7 @@
                 favorites.splice(index, 1);
             } else {
                 favorites.push(uuid);
+                cacheStation(stations.find(s => s.stationuuid === uuid) || currentStation);
             }
 
             localStorage.setItem('auraradio_favorites', JSON.stringify(favorites));
