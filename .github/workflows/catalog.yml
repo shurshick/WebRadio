@@ -23,7 +23,7 @@ jobs:
       - name: Restore the previous ranking snapshot
         run: |
           if git fetch --depth=1 origin catalog; then
-            if git show FETCH_HEAD:data/rankings.json > data/rankings.previous.json; then
+            if git cat-file -e FETCH_HEAD:data/rankings.json 2>/dev/null && git show FETCH_HEAD:data/rankings.json > data/rankings.previous.json; then
               mv data/rankings.previous.json data/rankings.json
             else
               rm -f data/rankings.previous.json
