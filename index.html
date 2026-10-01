@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ru" class="dark">
+<html lang="ru" data-theme="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -74,7 +74,86 @@
             70% { transform: scale(1); box-shadow: 0 0 0 8px rgba(16, 185, 129, 0); }
             100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
         }
+
+        html[data-theme="dark"] { color-scheme: dark; }
+        html[data-theme="light"] { color-scheme: light; }
+        html[data-theme="light"] body {
+            background: #f3f6fb;
+            color: #18243a;
+        }
+        html[data-theme="light"] ::-webkit-scrollbar-track { background: #e8eef6; }
+        html[data-theme="light"] ::-webkit-scrollbar-thumb { background: #bac7d7; }
+        html[data-theme="light"] .glass-panel {
+            background: rgba(255, 255, 255, 0.9);
+            border-color: #dbe4ef;
+            box-shadow: 0 8px 30px rgba(38, 58, 85, 0.06);
+        }
+        html[data-theme="light"] .glass-player {
+            background: rgba(255, 255, 255, 0.96);
+            border-top-color: #dbe4ef;
+            box-shadow: 0 -8px 30px rgba(38, 58, 85, 0.08);
+        }
+        html[data-theme="light"] [class*="bg-dark-"] { background-color: #eaf0f7; }
+        html[data-theme="light"] .bg-dark-800,
+        html[data-theme="light"] .bg-dark-800\/60,
+        html[data-theme="light"] .bg-dark-800\/95 { background-color: #f8fafc; }
+        html[data-theme="light"] .text-white,
+        html[data-theme="light"] .text-gray-200 { color: #18243a; }
+        html[data-theme="light"] .text-gray-300 { color: #334155; }
+        html[data-theme="light"] .text-gray-400,
+        html[data-theme="light"] .text-gray-400\/80 { color: #52647d; }
+        html[data-theme="light"] .text-gray-500 { color: #64748b; }
+        html[data-theme="light"] [class*="border-gray-"],
+        html[data-theme="light"] .border-dark-800 { border-color: #ccd7e5; }
+        html[data-theme="light"] .text-neon-cyan,
+        html[data-theme="light"] .text-neon-cyan\/70 { color: #087e9a; }
+        html[data-theme="light"] .text-neon-blue { color: #2457b7; }
+        html[data-theme="light"] .text-neon-pink,
+        html[data-theme="light"] .text-neon-pink\/70 { color: #af245e; }
+        html[data-theme="light"] .text-neon-purple { color: #6d28d9; }
+        html[data-theme="light"] .text-neon-emerald { color: #087e61; }
+        html[data-theme="light"] header h1 {
+            background-image: linear-gradient(90deg, #173754, #087e9a);
+        }
+        html[data-theme="light"] .hover\:bg-dark-600:hover,
+        html[data-theme="light"] .hover\:bg-dark-700:hover { background-color: #dbe6f2; }
+        html[data-theme="light"] .hover\:text-white:hover { color: #0f172a; }
+        html[data-theme="light"] .station-card:hover { border-color: #8daac3; }
+        html[data-theme="light"] .bg-neon-pink.text-white,
+        html[data-theme="light"] .bg-black\/50.text-white,
+        html[data-theme="light"] .bg-gradient-to-tr.text-white { color: #fff; }
+        html[data-theme="light"] input::placeholder { color: #64748b; }
+        html[data-theme="light"] select option { background: #fff; color: #18243a; }
+
+        @media (max-width: 639px) {
+            header { flex-wrap: wrap; gap: 12px; }
+            header > div:first-child { min-width: 0; }
+            header > div:first-child h1 { font-size: 15px; }
+            header > div:first-child p { display: none; }
+            header > div:nth-child(2) {
+                order: 3;
+                flex: 0 0 100%;
+                max-width: none;
+                margin: 0;
+            }
+            header > div:last-child { margin-left: auto; gap: 4px; }
+            header > div:last-child #navFavBtn { padding: 6px; gap: 4px; }
+            header > div:last-child > button:not(#navFavBtn) { width: 36px; height: 36px; flex-shrink: 0; }
+            aside, main { min-width: 0; max-width: 100%; }
+            .glass-player > div > div:last-child {
+                flex-wrap: wrap;
+                justify-content: center;
+                row-gap: 8px;
+            }
+        }
     </style>
+    <script>
+        try {
+            document.documentElement.dataset.theme = localStorage.getItem('auraradio_theme') === 'light' ? 'light' : 'dark';
+        } catch (_) {
+            document.documentElement.dataset.theme = 'dark';
+        }
+    </script>
     <script src="vendor/hls.min.js" onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js'"></script>
 
     <link rel="manifest" href="manifest.json">
@@ -112,6 +191,9 @@
                 <i class="fa-solid fa-heart text-pink-500"></i>
                 <span class="hidden sm:inline">Избранное</span>
                 <span id="favCountBadge" class="ml-1 px-1.5 py-0.2 bg-pink-500/20 text-pink-400 text-xs rounded-full font-bold">0</span>
+            </button>
+            <button id="themeToggle" onclick="toggleTheme()" class="w-10 h-10 rounded-xl bg-dark-700 hover:bg-dark-600 border border-gray-700/50 flex items-center justify-center text-gray-300 hover:text-white transition-all" type="button" aria-label="Включить светлую тему" aria-pressed="false" title="Включить светлую тему">
+                <i id="themeToggleIcon" class="fa-solid fa-sun" aria-hidden="true"></i>
             </button>
             <button onclick="toggleThemeModal()" class="w-10 h-10 rounded-xl bg-dark-700 hover:bg-dark-600 border border-gray-700/50 flex items-center justify-center text-gray-300 hover:text-white transition-all" title="Информация">
                 <i class="fa-solid fa-circle-info"></i>
@@ -470,7 +552,7 @@
                 </li>
                 <li class="flex items-center space-x-2">
                     <i class="fa-solid fa-check text-neon-emerald"></i>
-                    <span>Стильный интерфейс в темных тонах</span>
+                    <span>Светлая и тёмная темы интерфейса</span>
                 </li>
             </ul>
             <!-- Backup / Favorites Management -->
@@ -503,6 +585,27 @@
     <script src="js/sonara-core.js"></script>
     <script>
         const { safeNumber, validateCustomStation, countryMatches } = SonaraCore;
+
+        function applyTheme(theme, persist = false) {
+            const next = theme === 'light' ? 'light' : 'dark';
+            document.documentElement.dataset.theme = next;
+            const toggle = document.getElementById('themeToggle');
+            const icon = document.getElementById('themeToggleIcon');
+            const label = next === 'light' ? 'Включить тёмную тему' : 'Включить светлую тему';
+            toggle.setAttribute('aria-label', label);
+            toggle.setAttribute('aria-pressed', String(next === 'light'));
+            toggle.title = label;
+            icon.className = next === 'light' ? 'fa-solid fa-moon' : 'fa-solid fa-sun';
+            const meta = document.querySelector('meta[name="theme-color"]');
+            if (meta) meta.setAttribute('content', next === 'light' ? '#f3f6fb' : '#07080b');
+            if (persist) {
+                try { localStorage.setItem('auraradio_theme', next); } catch (_) { /* Keep the active theme for this tab. */ }
+            }
+        }
+
+        function toggleTheme() {
+            applyTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light', true);
+        }
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
@@ -680,6 +783,7 @@
 
         // Initialize App
         window.addEventListener('DOMContentLoaded', () => {
+            applyTheme(document.documentElement.dataset.theme);
             updateFavCountBadge();
             loadStations('explore');
             populateCountriesSelect();

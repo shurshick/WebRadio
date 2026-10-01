@@ -23,7 +23,7 @@ function runtime(storageData = {}, fetchImpl = async () => ({ ok: true, json: as
             getAttribute() { return null; }, play: async () => {}, pause() {}, load() {} };
         nodes.set(id, node); return node;
     }
-    const document = { getElementById: element, createElement: () => element('created' + Math.random()),
+    const document = { documentElement: { dataset: { theme: 'dark' } }, getElementById: element, createElement: () => element('created' + Math.random()),
         querySelector: () => null, querySelectorAll: () => [], body: element('body'), head: element('head'),
         readyState: 'loading', addEventListener() {} };
     const window = { addEventListener: (type, fn) => { listeners['window:' + type] = fn; } };
@@ -44,6 +44,23 @@ async function main() {
         for (const pattern of [/js\/sonara-core\.js/, /SonaraCore\.createBackup/, /SonaraCore\.parseBackup/,
             /SonaraCore\.lastStationSource/, /let activeRequestId = 0/, /SonaraCore\.nextHlsRecoveryAction/]) assert.match(html, pattern);
         assert.doesNotMatch(app, /function (safeNumber|validateCustomStation|countryMatches)\(/);
+    });
+    await test('theme toggle persists and restores the selected mode', () => {
+        const rt = runtime();
+        rt.boot();
+        assert.equal(rt.context.document.documentElement.dataset.theme, 'dark');
+        rt.context.toggleTheme();
+        assert.equal(rt.context.document.documentElement.dataset.theme, 'light');
+        assert.equal(rt.store.get('auraradio_theme'), 'light');
+        assert.equal(rt.nodes.get('themeToggle').title, 'Включить тёмную тему');
+        assert.equal(rt.nodes.get('themeToggleIcon').className, 'fa-solid fa-moon');
+        const next = runtime({ auraradio_theme: 'light' });
+        const initializer = html.match(/<script>\s*try \{([\s\S]*?)<\/script>/)[0].replace(/^<script>|<\/script>$/g, '');
+        vm.runInContext(initializer, next.context);
+        next.boot();
+        assert.equal(next.context.document.documentElement.dataset.theme, 'light');
+        next.context.toggleTheme();
+        assert.equal(next.store.get('auraradio_theme'), 'dark');
     });
     await test('storage validation calls production helpers', () => {
         assert.deepEqual(Core.parseStoredStringArray('broken'), []);
