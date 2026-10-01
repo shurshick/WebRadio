@@ -29,20 +29,26 @@ function buildCatalog(raw, updatedAt = new Date().toISOString()) {
     if (!Array.isArray(input) || input.length < 1000) throw new Error('Catalog is missing or unexpectedly small');
     const seen = new Set();
     const stations = [];
+    const countryNames = new Intl.DisplayNames(['en'], { type: 'region' });
     for (const item of input) {
         const id = String(item.stationuuid || '').trim();
         const name = String(item.name || '').trim();
-        const url = String(item.url_resolved || item.url || '').trim();
+        const url = String(item.url_resolved || item.url_stream || item.url || '').trim();
         if (!id || !name || !/^https?:\/\//i.test(url) || seen.has(id) || item.lastcheckok === false) continue;
         seen.add(id);
+        const code = String(item.countrycode || item.iso_3166_1 || '').toUpperCase();
+        let country = String(item.country || '');
+        if (!country && /^[A-Z]{2}$/.test(code)) {
+            try { country = countryNames.of(code); } catch { country = code; }
+        }
         stations.push({
             stationuuid: id,
             name,
             url_resolved: url,
-            favicon: String(item.favicon || ''),
+            favicon: String(item.favicon || item.url_favicon || ''),
             tags: String(item.tags || ''),
-            country: String(item.country || ''),
-            countrycode: String(item.countrycode || ''),
+            country,
+            countrycode: code,
             codec: String(item.codec || ''),
             bitrate: Number(item.bitrate) || 0,
             votes: Number(item.votes) || 0,
@@ -56,8 +62,6 @@ function buildCatalog(raw, updatedAt = new Date().toISOString()) {
 async function main() {
     const compressed = await download(SOURCE);
     const raw = JSON.parse(zlib.gunzipSync(compressed).toString('utf8'));
-    const sample = Array.isArray(raw) ? raw[0] : raw.stations?.[0];
-    console.log('Export record fields:', Object.keys(sample || {}).join(', '));
     const catalog = buildCatalog(raw);
     fs.mkdirSync(path.dirname(TARGET), { recursive: true });
     const temp = `${TARGET}.tmp`;

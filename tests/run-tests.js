@@ -42,11 +42,13 @@ function runtime(storageData = {}, fetchImpl = async () => ({ ok: true, json: as
 
 async function main() {
     await test('catalog export keeps valid playable stations and rejects incomplete snapshots', () => {
-        const input = Array.from({ length: 1001 }, (_, i) => ({ stationuuid: `id-${i}`, name: `Station ${i}`, url: `https://example.com/${i}`, countrycode: 'RU', lastcheckok: true }));
+        const input = Array.from({ length: 1001 }, (_, i) => ({ stationuuid: `id-${i}`, name: `Station ${i}`, url_stream: `https://example.com/${i}`, iso_3166_1: 'RU', url_favicon: 'https://example.com/icon.png' }));
         input.push({ ...input[0] }, { stationuuid: 'broken', name: 'Broken', url: 'javascript:alert(1)' });
         const catalog = buildCatalog(input, '2026-10-01T00:00:00Z');
         assert.equal(catalog.stations.length, 1001);
         assert.equal(catalog.stations[0].url_resolved, 'https://example.com/0');
+        assert.equal(catalog.stations[0].countrycode, 'RU');
+        assert.equal(catalog.stations[0].favicon, 'https://example.com/icon.png');
         assert.throws(() => buildCatalog(input.slice(0, 2)), /small/);
     });
     await test('syntax and shared core wiring', () => {
