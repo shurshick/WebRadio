@@ -401,13 +401,16 @@
                         <i class="fa-solid fa-forward-step"></i>
                     </button>
                     <!-- Stop Button -->
+                    <button onclick="openStreamUrlsModal()" class="text-gray-400 hover:text-white transition-colors text-base p-1" title="Адреса потоков станции">
+                        <i class="fa-solid fa-list"></i>
+                    </button>
                     <button onclick="stopRadio()" class="text-gray-400 hover:text-white transition-colors text-base p-1" title="Остановить">
                         <i class="fa-solid fa-stop"></i>
                     </button>
                 </div>
 
                 <!-- Equalizer Animation & Status Text -->
-                <div class="flex items-center space-x-3">
+                <div class="flex items-center space-x-3" style="max-width:100%">
                     <div id="equalizer" class="flex items-end space-x-1 h-5 paused-eq" role="img" aria-label="Воспроизведение не начато" title="Индикатор состояния плеера; не анализирует звук">
                         <div class="equalizer-bar rounded-t"></div>
                         <div class="equalizer-bar rounded-t"></div>
@@ -415,7 +418,12 @@
                         <div class="equalizer-bar rounded-t"></div>
                         <div class="equalizer-bar rounded-t"></div>
                     </div>
-                    <span id="playerStatusText" class="text-xs text-gray-400 font-medium">Остановлено</span>
+                    <span id="playerStatusText" class="text-xs text-gray-400 font-medium" style="overflow-wrap:anywhere">Остановлено</span>
+                </div>
+                <div id="playbackFailureActions" class="hidden flex items-center justify-center flex-wrap gap-3 mt-2">
+                    <button onclick="retryCurrentStation()" class="px-2 py-1 rounded-lg bg-dark-700 text-xs text-gray-200">Повторить</button>
+                    <button id="failureNextButton" onclick="nextAfterFailure()" class="px-2 py-1 rounded-lg bg-dark-700 text-xs text-gray-200">Следующая</button>
+                    <button id="cancelNextButton" onclick="cancelNextStationCountdown()" class="hidden px-2 py-1 rounded-lg bg-dark-700 text-xs text-gray-400">Отменить переход</button>
                 </div>
             </div>
 
@@ -516,11 +524,22 @@
             <h3 class="text-xl font-bold text-white mb-4">Добавить свою станцию</h3>
             <input type="text" id="customName" placeholder="Название (например, My Radio)" class="w-full mb-3 px-4 py-2 bg-dark-800 border border-gray-700 rounded-xl text-white outline-none focus:border-neon-cyan">
             <input type="text" id="customUrl" placeholder="Прямая ссылка (http://.../.m3u8)" class="w-full mb-4 px-4 py-2 bg-dark-800 border border-gray-700 rounded-xl text-white outline-none focus:border-neon-cyan">
+            <label for="customBackupUrls" class="block text-xs text-gray-400 mb-2">Запасные адреса — до пяти, по одному на строку</label>
+            <textarea id="customBackupUrls" rows="2" placeholder="https://..." class="w-full mb-4 px-4 py-2 bg-dark-800 border border-gray-700 rounded-xl text-white outline-none focus:border-neon-cyan"></textarea>
             <button onclick="saveCustomStation()" class="w-full py-2.5 bg-neon-pink hover:bg-pink-600 text-white rounded-xl font-medium transition-colors">Сохранить</button>
         </div>
     </div>
 
     <!-- Info / About Modal -->
+    <div id="streamUrlsModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm hidden">
+        <div class="glass-panel w-full max-w-md p-6 rounded-2xl border border-gray-700/80">
+            <h3 id="streamUrlsTitle" class="text-xl font-bold text-white mb-3">Адреса станции</h3>
+            <label for="streamUrlsInput" class="block text-xs text-gray-400 mb-3">До шести адресов, по одному на строку. Первый — основной, остальные — запасные. Ссылки сохраняются в этом браузере.</label>
+            <textarea id="streamUrlsInput" rows="6" class="w-full mb-4 px-4 py-2 bg-dark-800 border border-gray-700 rounded-xl text-white outline-none focus:border-neon-cyan"></textarea>
+            <button onclick="saveStreamUrls()" class="w-full py-2 mb-2 rounded-xl bg-neon-cyan text-dark-900">Сохранить</button>
+            <button onclick="closeStreamUrlsModal()" class="w-full py-2 rounded-xl bg-dark-700 text-gray-200">Отмена</button>
+        </div>
+    </div>
     <div id="infoModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm hidden">
         <div class="glass-panel w-full max-w-md p-6 rounded-2xl border border-gray-700/80 shadow-2xl relative">
             <button onclick="toggleThemeModal()" class="absolute top-4 right-4 text-gray-400 hover:text-white">
@@ -532,7 +551,7 @@
                 </div>
                 <div>
                     <h3 class="font-bold text-lg text-white">О приложении</h3>
-                    <p class="text-xs text-gray-400">Sonara Radio v2.4.1</p>
+                    <p class="text-xs text-gray-400">Sonara Radio v2.5.0</p>
                 </div>
             </div>
             <p class="text-sm text-gray-300 leading-relaxed mb-4">
@@ -730,7 +749,9 @@
         let searchTimeout = null;
         let activeRequestId = 0;
         let isPlaying = false;
-        let consecutiveStreamErrors = 0;
+        let automaticStationFailures = 0;
+        let streamOverrides = [];
+        try { streamOverrides = SonaraCore.normalizeStreamOverrides(JSON.parse(localStorage.getItem('sonara_stream_urls') || '[]')); } catch {}
 
         function loadCachedStations() {
             try {
@@ -762,7 +783,8 @@
                 cache[station.stationuuid] = {
                     stationuuid: station.stationuuid, name: station.name, url_resolved: station.url_resolved,
                     favicon: station.favicon || '', tags: station.tags || '', country: station.country || '',
-                    countrycode: station.countrycode || '', codec: station.codec || '', bitrate: station.bitrate || 0
+                    countrycode: station.countrycode || '', codec: station.codec || '', bitrate: station.bitrate || 0,
+                    alternate_urls: SonaraCore.stationStreamUrls(station).slice(1)
                 };
                 const ids = Object.keys(cache);
                 for (const id of ids.slice(0, Math.max(0, ids.length - 200))) delete cache[id];
@@ -1105,41 +1127,22 @@
                 }
             });
 
-            // Audio Events
-            audioElement.addEventListener('playing', () => {
-                consecutiveStreamErrors = 0;
-                setPlaybackState('playing');
+            // Events only affect the active attempt.
+            audioElement.addEventListener('playing', () => playbackController.playing(activeAttemptToken));
+            audioElement.addEventListener('waiting', () => playbackController.waiting(activeAttemptToken));
+            audioElement.addEventListener('stalled', () => {
+                if (audioElement.readyState < 3) playbackController.waiting(activeAttemptToken);
             });
-
-            audioElement.addEventListener('waiting', () => {
-                setPlaybackState('loading');
+            audioElement.addEventListener('ended', () => {
+                if (!playbackController.isCurrent(activeAttemptToken)) return;
+                if (!Number.isFinite(audioElement.duration)) playbackController.fail(activeAttemptToken, 'ended');
+                else playbackController.stop('ended');
             });
-            audioElement.addEventListener('ended', () => setPlaybackState('ended'));
-            audioElement.addEventListener('emptied', () => setPlaybackState('stopped'));
-
-            audioElement.addEventListener('error', (e) => {
-                setPlaybackState('error');
-                playerStatusText.textContent = 'Ошибка потока, переключение...';
-                liveBadge.className = 'absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full border-2 border-dark-800 flex items-center justify-center';
-                const eqDiv = document.getElementById('equalizer');
-                if (eqDiv) eqDiv.classList.add('paused-eq');
-                console.error('Audio error:', e);
-
-                if (++consecutiveStreamErrors > 5) {
-                    playerStatusText.textContent = 'Станции недоступны';
-                    showToast('Ни одна станция не отвечает, автопереключение остановлено');
-                    return;
-                }
-
-                setTimeout(() => {
-                    if (stations.length > 1) {
-                        showToast('Поток недоступен, автопереключение на следующую станцию');
-                        playNextStation();
-                    }
-                }, 1500);
-            });
+            audioElement.addEventListener('error', () => playbackController.fail(activeAttemptToken, 'network'));
             audioElement.addEventListener('pause', () => {
-                setPlaybackState('paused');
+                if (playbackController.snapshot().phase !== 'playing') return;
+                if (audioElement.ended && !Number.isFinite(audioElement.duration)) playbackController.fail(activeAttemptToken, 'ended');
+                else playbackController.stop(audioElement.ended ? 'ended' : 'paused');
             });
 
             
@@ -1502,7 +1505,7 @@
             const safeCodec = escapeHTML(station.codec || '—');
             const numBitrate = safeNumber(station.bitrate, 0);
             const safeBitrate = numBitrate > 0 ? numBitrate + 'k' : '';
-            const safeUrl = escapeHTML(station.url_resolved);
+            const safeUrl = escapeHTML(stationUrls(station)[0] || station.url_resolved);
             
             const isFav = favorites.includes(station.stationuuid);
             const isCurrent = currentStation && currentStation.stationuuid === station.stationuuid;
@@ -1544,6 +1547,7 @@
                             <button onclick="copyStreamUrl(this.dataset.url, event)" data-url="${safeUrl}" class="p-1.5 bg-dark-700 hover:bg-dark-600 text-gray-400 hover:text-white rounded-xl transition-all border border-gray-700/50" title="Копировать ссылку на поток">
                                 <i class="fa-solid fa-link text-xs"></i>
                             </button>
+                            <button onclick="openStreamUrlsModal(this.closest('.station-card').dataset.uuid)" class="p-1.5 bg-dark-700 rounded-xl text-gray-400" title="Адреса потоков"><i class="fa-solid fa-list"></i></button>
                             <button onclick="playStation(this.closest('.station-card').dataset.uuid)" class="px-3 py-1.5 bg-dark-700 hover:bg-neon-cyan hover:text-dark-900 text-gray-200 rounded-xl transition-all font-medium flex items-center space-x-1.5 border border-gray-700/50">
                                 <i class="fa-solid fa-play text-[10px]"></i>
                                 <span>Слушать</span>
@@ -1641,71 +1645,135 @@
         }
 
         let hlsInstance = null;
-        let hlsNetworkRecoveryAttempts = 0;
         let hlsMediaRecoveryAttempts = 0;
         function setPlaybackState(state) {
-            const messages = { playing: 'В эфире (LIVE)', loading: 'Буферизация...', paused: 'Пауза', stopped: 'Остановлено', ended: 'Поток завершён', error: 'Ошибка воспроизведения потока' };
-            isPlaying = state === 'playing' || state === 'loading';
+            const messages = { playing: 'В эфире (LIVE)', loading: 'Буферизация...', retrying: 'Переподключение...', switching: 'Переход на запасной адрес...', paused: 'Пауза', stopped: 'Остановлено', ended: 'Поток завершён', error: 'Ошибка воспроизведения потока' };
+            isPlaying = ['playing', 'loading', 'retrying', 'switching'].includes(state);
             updatePlayButtonState();
             playerStatusText.textContent = messages[state];
             equalizer.classList[state === 'playing' ? 'remove' : 'add']('paused-eq');
             equalizer.setAttribute('aria-label', messages[state]);
-            const color = state === 'playing' ? 'bg-neon-emerald' : state === 'loading' ? 'bg-yellow-500' : state === 'error' ? 'bg-red-500' : 'bg-gray-500';
+            const color = state === 'playing' ? 'bg-neon-emerald' : isPlaying ? 'bg-yellow-500' : state === 'error' ? 'bg-red-500' : 'bg-gray-500';
             liveBadge.className = `absolute -top-1 -right-1 w-4 h-4 ${color} rounded-full border-2 border-dark-800 flex items-center justify-center${state === 'playing' ? ' pulse-live' : ''}`;
             if ('mediaSession' in navigator) navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
         }
-        function playStreamUrl(url) {
-            audioElement.pause();
-            setPlaybackState('loading');
-            if (hlsInstance) {
-                hlsInstance.destroy();
-                hlsInstance = null;
+        let activeAttemptToken = 0;
+        const automaticallyFailedStations = new Set();
+        let nextStationTimer = null, nextStationEpoch = 0, plannedNextStation = null;
+        function nextStationCandidate(skipFailed = false) {
+            const index = stations.findIndex(s => s.stationuuid === currentStation?.stationuuid);
+            for (let offset = 1; offset <= stations.length; offset++) {
+                const candidate = stations[(index + offset + stations.length) % stations.length];
+                if (candidate.stationuuid !== currentStation?.stationuuid && (!skipFailed || !automaticallyFailedStations.has(candidate.stationuuid))) return candidate;
             }
-            hlsNetworkRecoveryAttempts = 0;
+            return null;
+        }
+        function cancelNextStationCountdown() {
+            nextStationEpoch++;
+            if (nextStationTimer != null) clearTimeout(nextStationTimer);
+            nextStationTimer = null; plannedNextStation = null;
+            document.getElementById('failureNextButton').textContent = 'Следующая';
+            document.getElementById('cancelNextButton').classList.add('hidden');
+        }
+        function scheduleNextStationCountdown() {
+            cancelNextStationCountdown();
+            automaticStationFailures++;
+            if (currentStation) automaticallyFailedStations.add(currentStation.stationuuid);
+            const button = document.getElementById('failureNextButton');
+            button.disabled = !nextStationCandidate();
+            const candidate = nextStationCandidate(true);
+            if (!candidate || automaticStationFailures >= 5) {
+                if (automaticStationFailures >= 5) playerStatusText.textContent += ' · Автопереход остановлен после пяти отказов';
+                return;
+            }
+            plannedNextStation = candidate;
+            document.getElementById('cancelNextButton').classList.remove('hidden');
+            const deadline = Date.now() + 10000, epoch = nextStationEpoch, stationId = currentStation?.stationuuid;
+            function tick() {
+                if (epoch !== nextStationEpoch || stationId !== currentStation?.stationuuid || playbackController.snapshot().phase !== 'failed') return;
+                const remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+                button.textContent = `Следующая (${remaining})`;
+                if (remaining === 0) nextAfterFailure(true);
+                else nextStationTimer = setTimeout(tick, 250);
+            }
+            tick();
+        }
+        function nextAfterFailure(automatic = false) {
+            const next = plannedNextStation || nextStationCandidate();
+            cancelNextStationCountdown();
+            if (next) playStation(next.stationuuid, automatic, next);
+        }
+        function retryCurrentStation() {
+            if (!currentStation) return;
+            automaticStationFailures = 0; automaticallyFailedStations.clear();
+            playStreamUrl(currentStation.url_resolved);
+        }
+        function disconnectStream() {
+            if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
+            audioElement.pause();
+            audioElement.removeAttribute('src');
+            audioElement.load();
+        }
+        const playbackController = SonaraCore.createPlaybackController({
+            connect: connectStream,
+            disconnect: disconnectStream,
+            onStable: () => { automaticStationFailures = 0; automaticallyFailedStations.clear(); },
+            onState: (state, detail) => {
+                const failed = state === 'failed';
+                setPlaybackState(failed ? 'error' : state);
+                document.getElementById('playbackFailureActions').classList[failed ? 'remove' : 'add']('hidden');
+                if (state === 'playing' && detail.address > 1) playerStatusText.textContent = 'В эфире · запасной адрес ' + (detail.address - 1);
+                if (state === 'retrying') playerStatusText.textContent = 'Переподключение ' + detail.retries + '/2 через ' + (detail.delay / 1000) + ' с';
+                if (state === 'switching') playerStatusText.textContent = 'Пробуем запасной адрес ' + (detail.address - 1) + '/' + (detail.total - 1);
+                if (failed) {
+                    document.getElementById('failureNextButton').disabled = !nextStationCandidate();
+                    playerStatusText.textContent = detail.reason === 'blocked' ? 'Браузер запретил запуск. Нажмите «Повторить»' : 'Станция недоступна: ни один адрес не удалось воспроизвести';
+                    if (detail.reason !== 'blocked') scheduleNextStationCountdown();
+                }
+                equalizer.setAttribute('aria-label', playerStatusText.textContent);
+            }
+        });
+        function connectStream(url, token) {
+            activeAttemptToken = token;
             hlsMediaRecoveryAttempts = 0;
-            if (url.includes('.m3u8') && typeof Hls !== 'undefined' && Hls.isSupported()) {
-                const instance = new Hls();
+            const rejectPlayback = err => {
+                if (!playbackController.isCurrent(token)) return;
+                playbackController.fail(token, err.name === 'NotAllowedError' ? 'blocked' : 'network');
+            };
+            if (/\.m3u8(?:[?#]|$)/i.test(url) && typeof Hls !== 'undefined' && Hls.isSupported()) {
+                const instance = new Hls({ manifestLoadingMaxRetry: 0, levelLoadingMaxRetry: 0, fragLoadingMaxRetry: 0 });
                 hlsInstance = instance;
-                instance.loadSource(url);
-                instance.attachMedia(audioElement);
                 instance.on(Hls.Events.MANIFEST_PARSED, () => {
-                    if (hlsInstance !== instance) return;
-                    audioElement.play().catch(err => {
-                        console.error('Playback error:', err);
-                        if (hlsInstance === instance) setPlaybackState('error');
-                    });
+                    if (hlsInstance === instance && playbackController.isCurrent(token)) audioElement.play().catch(rejectPlayback);
                 });
                 instance.on(Hls.Events.ERROR, (_event, data) => {
-                    if (!data.fatal || hlsInstance !== instance) return;
-                    const action = SonaraCore.nextHlsRecoveryAction(
-                        data.type, hlsNetworkRecoveryAttempts, hlsMediaRecoveryAttempts);
-                    if (action === 'RECOVER_NETWORK') {
-                        setPlaybackState('loading');
-                        hlsNetworkRecoveryAttempts++;
-                        instance.startLoad();
-                    } else if (action === 'RECOVER_MEDIA') {
-                        setPlaybackState('loading');
+                    if (!data.fatal || hlsInstance !== instance || !playbackController.isCurrent(token)) return;
+                    if (data.type === Hls.ErrorTypes.MEDIA_ERROR && hlsMediaRecoveryAttempts < 1) {
                         hlsMediaRecoveryAttempts++;
+                        playbackController.waiting(token);
                         instance.recoverMediaError();
-                    } else {
-                        instance.destroy();
-                        hlsInstance = null;
-                        setPlaybackState('error');
-                    }
+                    } else playbackController.fail(token, 'network');
                 });
+                instance.loadSource(url);
+                instance.attachMedia(audioElement);
             } else {
                 audioElement.src = url;
-                audioElement.play().catch(err => {
-                    console.error('Playback error:', err);
-                    if (audioElement.getAttribute('src') === url) setPlaybackState('error');
-                });
+                audioElement.play().catch(rejectPlayback);
             }
         }
+        function stationUrls(station) {
+            return streamOverrides.find(item => item.stationuuid === station?.stationuuid)?.urls || SonaraCore.stationStreamUrls(station);
+        }
+        function playStreamUrl(url) {
+            cancelNextStationCountdown();
+            playbackController.start(currentStation && url === currentStation.url_resolved ? stationUrls(currentStation) : [url]);
+        }
 
-        function playStation(uuid) {
-            const station = stations.find(s => s.stationuuid === uuid) || customStations.find(s => s.stationuuid === uuid) || savedFavorites.find(s => s.stationuuid === uuid) || (currentStation?.stationuuid === uuid ? currentStation : null);
+        function playStation(uuid, automatic = false, knownStation = null) {
+            const station = (knownStation?.stationuuid === uuid ? knownStation : null) || stations.find(s => s.stationuuid === uuid) || customStations.find(s => s.stationuuid === uuid) || savedFavorites.find(s => s.stationuuid === uuid) || (currentStation?.stationuuid === uuid ? currentStation : null);
             if(station) addToHistory(station.stationuuid);
             if (!station) return;
+            if (!automatic) { automaticStationFailures = 0; automaticallyFailedStations.clear(); }
             cacheStation(station);
 
             currentStation = station;
@@ -1749,20 +1817,14 @@
             if (isPlaying) {
                 stopRadio();
             } else {
-                playStreamUrl(currentStation.url_resolved);
+                retryCurrentStation();
             }
         }
 
         // Stop Radio
         function stopRadio() {
-            audioElement.pause();
-            if (typeof hlsInstance !== 'undefined' && hlsInstance) {
-                hlsInstance.destroy();
-                hlsInstance = null;
-            }
-            audioElement.removeAttribute("src");
-            audioElement.load();
-            setPlaybackState('stopped');
+            cancelNextStationCountdown();
+            playbackController.stop();
         }
 
         // Update Play Button Icon
@@ -1792,19 +1854,63 @@
         }
 
         // Toggle Favorite
+        let editingStreamStation = null;
+        function readStreamUrls(text) {
+            const lines = text.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+            const urls = [...new Set(lines.map(value => SonaraCore.normalizeStreamUrls([value])[0]))];
+            if (!urls.length || urls.includes(undefined)) { showToast('Укажите корректные адреса http:// или https://, по одному на строку'); return null; }
+            if (urls.length > 6) { showToast('Для одной станции можно сохранить до шести адресов'); return null; }
+            return urls;
+        }
+        function openStreamUrlsModal(uuid = currentStation?.stationuuid) {
+            editingStreamStation = stations.find(s => s.stationuuid === uuid) || customStations.find(s => s.stationuuid === uuid) || savedFavorites.find(s => s.stationuuid === uuid) || (currentStation?.stationuuid === uuid ? currentStation : null);
+            if (!editingStreamStation) { showToast('Сначала выберите станцию'); return; }
+            if (currentStation?.stationuuid === uuid) cancelNextStationCountdown();
+            document.getElementById('streamUrlsTitle').textContent = 'Адреса: ' + editingStreamStation.name;
+            document.getElementById('streamUrlsInput').value = stationUrls(editingStreamStation).join('\n');
+            document.getElementById('streamUrlsModal').classList.remove('hidden');
+        }
+        function closeStreamUrlsModal() {
+            document.getElementById('streamUrlsModal').classList.add('hidden');
+            editingStreamStation = null;
+        }
+        function saveStreamUrls() {
+            if (!editingStreamStation) return;
+            const urls = readStreamUrls(document.getElementById('streamUrlsInput').value);
+            if (!urls) return;
+            const station = { ...editingStreamStation, url_resolved: urls[0], alternate_urls: urls.slice(1) };
+            const nextOverrides = [...streamOverrides.filter(s => s.stationuuid !== station.stationuuid), { stationuuid: station.stationuuid, urls }];
+            const nextCustom = customStations.map(s => s.stationuuid === station.stationuuid ? station : s);
+            try {
+                localStorage.setItem('sonara_stream_urls', JSON.stringify(nextOverrides));
+                if (station.stationuuid.startsWith('custom_')) localStorage.setItem('auraradio_custom', JSON.stringify(nextCustom));
+            } catch { showToast('Не удалось сохранить адреса в браузере'); return; }
+            streamOverrides = nextOverrides; customStations = nextCustom;
+            cacheStation(station);
+            const restart = isPlaying && currentStation?.stationuuid === station.stationuuid;
+            if (currentStation?.stationuuid === station.stationuuid) currentStation = station;
+            stations = stations.map(s => s.stationuuid === station.stationuuid ? station : s);
+            allLoadedStations = allLoadedStations.map(s => s.stationuuid === station.stationuuid ? station : s);
+            closeStreamUrlsModal();
+            if (restart) retryCurrentStation();
+            showToast(restart ? 'Адреса сохранены. Переподключаемся' : 'Адреса станции сохранены');
+        }
         function openCustomModal() {
             document.getElementById('customName').value = '';
             document.getElementById('customUrl').value = '';
+            document.getElementById('customBackupUrls').value = '';
             document.getElementById('customModal').classList.remove('hidden');
         }
         function closeCustomModal() {
             document.getElementById('customModal').classList.add('hidden');
         }
         function saveCustomStation() {
+            const urls = readStreamUrls([document.getElementById('customUrl').value, document.getElementById('customBackupUrls').value].join('\n'));
+            if (!urls) return;
             const station = validateCustomStation({
                 stationuuid: 'custom_' + (globalThis.crypto?.randomUUID?.() || Date.now() + '_' + Math.random().toString(36).slice(2)),
                 name: document.getElementById('customName').value.trim(),
-                url_resolved: document.getElementById('customUrl').value.trim()
+                url_resolved: urls[0], alternate_urls: urls.slice(1)
             });
             if (!station) { showToast('Введите название и корректный адрес потока http:// или https://'); return; }
             const nextCustom = [...customStations, station];
@@ -2110,7 +2216,7 @@
                 showToast('Сначала выберите радиостанцию');
                 return;
             }
-            copyStreamUrl(currentStation.url_resolved);
+            copyStreamUrl(stationUrls(currentStation)[0]);
         }
 
         // Export & Import Favorites JSON
@@ -2119,7 +2225,7 @@
                 showToast('Нет данных для экспорта');
                 return;
             }
-            const payload = SonaraCore.createBackup(favorites, customStations, savedFavorites);
+            const payload = SonaraCore.createBackup(favorites, customStations, savedFavorites, streamOverrides);
             const dataStr = "data:application/json;charset=utf-8," + encodeURIComponent(JSON.stringify(payload, null, 2));
             const downloadAnchor = document.createElement('a');
             downloadAnchor.setAttribute("href", dataStr);
@@ -2140,6 +2246,9 @@
                     const imported = SonaraCore.parseBackup(e.target.result);
                     favorites = SonaraCore.normalizeStringArray([...favorites, ...imported.favorites]);
                     customStations = SonaraCore.normalizeCustomStations([...customStations, ...imported.customStations]);
+                    const included = new Set([...imported.favorites, ...imported.customStations.map(s => s.stationuuid)]);
+                    streamOverrides = SonaraCore.normalizeStreamOverrides([...streamOverrides, ...imported.streamOverrides.filter(s => included.has(s.stationuuid))]);
+                    localStorage.setItem('sonara_stream_urls', JSON.stringify(streamOverrides));
                     for (const station of imported.savedStations) saveFavoriteStation(station);
                     localStorage.setItem('auraradio_favorites', JSON.stringify(favorites));
                     localStorage.setItem('auraradio_custom', JSON.stringify(customStations));

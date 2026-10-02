@@ -14,7 +14,25 @@ const app = html.match(/<!-- JavaScript Application Logic -->\s*<script src="js\
 let passed = 0;
 async function test(name, fn) { await fn(); console.log('PASS', name); passed++; }
 
-function runtime(storageData = {}, fetchImpl = async () => ({ ok: true, json: async () => [] }), indexedDB) {
+function fakeClock() {
+    let now = Date.now(), id = 0;
+    const jobs = new Map();
+    return { get now() { return now; },
+        setTimeout(fn, delay) { const key = ++id; jobs.set(key, { fn, at: now + delay }); return key; },
+        clearTimeout(key) { jobs.delete(key); },
+        advance(duration) {
+            const target = now + duration;
+            for (;;) {
+                const next = [...jobs].sort((a, b) => a[1].at - b[1].at)[0];
+                if (!next || next[1].at > target) break;
+                now = next[1].at; jobs.delete(next[0]); next[1].fn();
+            }
+            now = target;
+        }, pending: () => jobs.size };
+}
+function runtime(storageData = {}, fetchImpl = async () => ({ ok: true, json: async () => [] }), indexedDB, fakeGlobalTimers = false) {
+    const clock = fakeClock();
+    const runtimeCore = { ...Core, createPlaybackController: options => Core.createPlaybackController({ ...options, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout }) };
     const nodes = new Map(), listeners = {}, requests = [], store = new Map(Object.entries(storageData));
     function element(id = '') {
         if (nodes.has(id)) return nodes.get(id);
@@ -32,21 +50,132 @@ function runtime(storageData = {}, fetchImpl = async () => ({ ok: true, json: as
         readyState: 'loading', addEventListener() {} };
     const window = { addEventListener: (type, fn) => { listeners['window:' + type] = fn; } };
     const localStorage = { getItem: key => store.get(key) ?? null, setItem: (key, value) => store.set(key, String(value)) };
-    const context = vm.createContext({ SonaraCore: Core, document, window, localStorage, navigator: {},
+    const context = vm.createContext({ SonaraCore: runtimeCore, document, window, localStorage, navigator: {},
         console: { log() {}, warn() {}, error() {} },
         fetch: (...args) => { requests.push(args[0]); return fetchImpl(...args); },
-        AbortSignal, URL, setTimeout, clearTimeout, setInterval, clearInterval, Date, Math, indexedDB,
+        AbortSignal, URL, setTimeout: fakeGlobalTimers ? clock.setTimeout : setTimeout, clearTimeout: fakeGlobalTimers ? clock.clearTimeout : clearTimeout, setInterval, clearInterval,
+        Date: fakeGlobalTimers ? class extends Date { static now() { return clock.now; } } : Date, Math, indexedDB,
         btoa: str => Buffer.from(str, 'binary').toString('base64'), encodeURIComponent, unescape,
         FileReader: class { readAsText(file) { this.onload({ target: { result: file.text } }); } } });
     vm.runInContext(app, context, { filename: 'index.html' });
-    return { context, nodes, listeners, requests, store, boot: () => listeners['window:DOMContentLoaded']() };
+    return { context, nodes, listeners, requests, store, clock, boot: () => listeners['window:DOMContentLoaded']() };
 }
 
 async function main() {
+    await test('stream backups validate, deduplicate and transfer in backup v3 with v2 import', () => {
+        const station = { stationuuid: 'custom_one', name: 'Mine', url_resolved: 'https://example.com/main', alternate_urls: ['https://example.com/main', 'javascript:bad', 'https://example.com/backup'] };
+        const payload = Core.createBackup(['custom_one', 'catalog_one'], [station], [{ ...station, stationuuid: 'catalog_one' }], [{ stationuuid: 'catalog_one', urls: ['https://example.com/override', 'https://example.com/backup'] }]);
+        const restored = Core.parseBackup(JSON.stringify(payload));
+        assert.equal(payload.version, 3);
+        assert.deepEqual(restored.customStations[0].alternate_urls, ['https://example.com/backup']);
+        assert.deepEqual(restored.streamOverrides[0].urls, ['https://example.com/override', 'https://example.com/backup']);
+        assert.deepEqual(Core.parseBackup({ version: 2, favorites: ['old'], customStations: [], savedStations: [] }).streamOverrides, []);
+        assert.deepEqual(Core.normalizeStreamUrls(['file:///local', 'https://', null]), []);
+    });
+    await test('controller retries twice per address, advances backups and stops after exhaustion', () => {
+        const clock = fakeClock(), attempts = [], states = [];
+        const controller = Core.createPlaybackController({ setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,
+            connect: (url, token) => attempts.push({ url, token }), disconnect() {}, onState: state => states.push(state) });
+        controller.start(['https://example.com/main', 'https://example.com/backup']);
+        for (let address = 0; address < 2; address++) {
+            for (let attempt = 0; attempt < 3; attempt++) {
+                controller.fail(controller.snapshot().token);
+                if (attempt < 2) {
+                    const count = attempts.length, delay = attempt === 0 ? 1500 : 3000;
+                    clock.advance(delay - 1); assert.equal(attempts.length, count);
+                    clock.advance(1); assert.equal(attempts.length, count + 1);
+                } else if (address === 0) clock.advance(1500);
+            }
+        }
+        assert.equal(attempts.length, 6);
+        assert.equal(controller.snapshot().phase, 'failed');
+        clock.advance(100000); assert.equal(attempts.length, 6); assert.equal(clock.pending(), 0);
+        assert.deepEqual(attempts.map(a => a.url), Array(3).fill('https://example.com/main').concat(Array(3).fill('https://example.com/backup')));
+        assert(states.includes('switching'));
+    });
+    await test('late promises, duplicate errors and stopped reconnects cannot resume an old attempt', () => {
+        const clock = fakeClock(), attempts = [];
+        const controller = Core.createPlaybackController({ setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout, connect: (url, token) => attempts.push({ url, token }), disconnect() {}, onState() {} });
+        controller.start(['https://example.com/old']); const oldToken = controller.snapshot().token;
+        controller.fail(oldToken); controller.fail(oldToken);
+        assert.equal(controller.snapshot().retries, 1);
+        controller.start(['https://example.com/new']);
+        controller.fail(oldToken); controller.playing(oldToken);
+        assert.equal(controller.snapshot().phase, 'connecting');
+        controller.stop(); clock.advance(100000);
+        assert.equal(attempts.length, 2); assert.equal(clock.pending(), 0);
+    });
+    await test('timeouts recover stalled playback and fleeting playing events do not reset retry budget', () => {
+        const clock = fakeClock();
+        const controller = Core.createPlaybackController({ setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout, connect() {}, disconnect() {}, onState() {} });
+        controller.start(['https://example.com/live']);
+        clock.advance(12000); assert.equal(controller.snapshot().phase, 'backoff');
+        clock.advance(1500); controller.playing(); controller.waiting();
+        clock.advance(15000); assert.equal(controller.snapshot().retries, 2);
+        clock.advance(3000); controller.playing(); controller.waiting();
+        clock.advance(15000); assert.equal(controller.snapshot().phase, 'failed');
+        controller.start(['https://example.com/live']); controller.fail(controller.snapshot().token);
+        clock.advance(1500); controller.playing(); clock.advance(30000);
+        assert.equal(controller.snapshot().retries, 0); controller.stop();
+    });
+    function failSelectedStation(rt) {
+        for (let attempt = 0; attempt < 3; attempt++) {
+            vm.runInContext("playbackController.fail(activeAttemptToken, 'network')", rt.context);
+            if (attempt < 2) rt.clock.advance(attempt === 0 ? 1500 : 3000);
+        }
+    }
+    function countdownRuntime() {
+        const rt = runtime({}, undefined, undefined, true);
+        vm.runInContext("stations = Array.from({length: 6}, (_, i) => ({ stationuuid: 'custom_' + i, name: 'Station ' + i, url_resolved: 'https://example.com/' + i })); allLoadedStations = stations", rt.context);
+        rt.context.playStation('custom_0');
+        return rt;
+    }
+    await test('Next countdown advances at ten seconds and never changes station early', () => {
+        const rt = countdownRuntime(); failSelectedStation(rt);
+        assert.equal(rt.nodes.get('failureNextButton').textContent, 'Следующая (10)');
+        rt.clock.advance(9000); assert.equal(rt.nodes.get('failureNextButton').textContent, 'Следующая (1)');
+        assert.equal(vm.runInContext('currentStation.stationuuid', rt.context), 'custom_0');
+        rt.clock.advance(1000); assert.equal(vm.runInContext('currentStation.stationuuid', rt.context), 'custom_1');
+        rt.context.stopRadio();
+    });
+    await test('cancel, stop, retry and manual station selection cancel automatic Next', () => {
+        for (const action of ['cancelNextStationCountdown', 'stopRadio', 'retryCurrentStation']) {
+            const rt = countdownRuntime(); failSelectedStation(rt); rt.context[action](); rt.clock.advance(10000);
+            assert.equal(vm.runInContext('currentStation.stationuuid', rt.context), 'custom_0'); rt.context.stopRadio();
+        }
+        const rt = countdownRuntime(); failSelectedStation(rt); rt.context.playStation('custom_4'); rt.clock.advance(10000);
+        assert.equal(vm.runInContext('currentStation.stationuuid', rt.context), 'custom_4'); rt.context.stopRadio();
+    });
+    await test('automatic station chain stops after five failures and blocked playback does not skip', () => {
+        const rt = countdownRuntime();
+        for (let i = 0; i < 5; i++) { failSelectedStation(rt); if (i < 4) rt.clock.advance(10000); }
+        assert.equal(vm.runInContext('currentStation.stationuuid', rt.context), 'custom_4');
+        assert.match(rt.nodes.get('playerStatusText').textContent, /пяти отказов/);
+        rt.clock.advance(100000); assert.equal(vm.runInContext('currentStation.stationuuid', rt.context), 'custom_4');
+        rt.context.retryCurrentStation(); vm.runInContext("playbackController.fail(activeAttemptToken, 'blocked')", rt.context);
+        rt.clock.advance(100000); assert.equal(vm.runInContext('currentStation.stationuuid', rt.context), 'custom_4');
+        assert.match(rt.nodes.get('playerStatusText').textContent, /Браузер запретил/); rt.context.stopRadio();
+    });
+    await test('custom form and catalog address editor persist backup URLs without replacing station identity', async () => {
+        const rt = runtime(); rt.context.openCustomModal();
+        rt.nodes.get('customName').value = 'Mine'; rt.nodes.get('customUrl').value = 'https://example.com/main';
+        rt.nodes.get('customBackupUrls').value = 'https://example.com/backup\nhttps://example.com/backup';
+        rt.context.saveCustomStation(); await new Promise(resolve => setTimeout(resolve, 0));
+        assert.deepEqual(JSON.parse(rt.store.get('auraradio_custom'))[0].alternate_urls, ['https://example.com/backup']);
+        vm.runInContext("stations = [{stationuuid: 'catalog_one', name: 'Catalog', url_resolved: 'https://example.com/original'}]", rt.context);
+        rt.context.openStreamUrlsModal('catalog_one');
+        rt.nodes.get('streamUrlsInput').value = 'https://example.com/main\nhttps://example.com/backup'; rt.context.saveStreamUrls();
+        rt.context.playStation('catalog_one');
+        assert.equal(vm.runInContext('currentStation.stationuuid', rt.context), 'catalog_one');
+        assert.equal(rt.nodes.get('audioElement').src, 'https://example.com/main');
+        assert.equal(JSON.parse(rt.store.get('sonara_stream_urls'))[0].urls.length, 2); rt.context.stopRadio();
+    });
     await test('playback indicator follows playing, waiting, pause, ended and emptied', () => {
         const rt = runtime(); rt.boot();
         const eq = rt.nodes.get('equalizer');
-        for (const event of ['playing', 'waiting', 'playing', 'pause', 'playing', 'ended', 'playing', 'emptied']) {
+        for (const event of ['playing', 'waiting', 'playing', 'pause', 'playing', 'ended']) {
+            if (event === 'playing' && !vm.runInContext('isPlaying', rt.context)) rt.context.playStreamUrl('https://example.com/live');
+            rt.nodes.get('audioElement').duration = 2;
             rt.listeners['audioElement:' + event]();
             assert.equal(eq.classList.contains('paused-eq'), event !== 'playing');
             assert.equal(vm.runInContext('isPlaying', rt.context), event === 'playing' || event === 'waiting');
@@ -54,13 +183,15 @@ async function main() {
     });
     await test('new stream and rejected playback stop decorative animation', async () => {
         const rt = runtime(); rt.boot();
+        rt.context.playStreamUrl('https://example.com/previous');
         rt.listeners['audioElement:playing']();
         rt.nodes.get('audioElement').play = () => Promise.reject(new Error('unsupported stream'));
         rt.context.playStreamUrl('https://example.com/bad');
         assert(rt.nodes.get('equalizer').classList.contains('paused-eq'));
         await new Promise(resolve => setTimeout(resolve, 0));
-        assert.equal(vm.runInContext('isPlaying', rt.context), false);
-        assert.equal(rt.nodes.get('playerStatusText').textContent, 'Ошибка воспроизведения потока');
+        assert.equal(vm.runInContext('playbackController.snapshot().phase', rt.context), 'backoff');
+        assert.match(rt.nodes.get('playerStatusText').textContent, /Переподключение/);
+        rt.context.stopRadio();
     });
     await test('custom station form saves playable favorite and rejects invalid URL', async () => {
         const rt = runtime();
@@ -99,7 +230,7 @@ async function main() {
     });
     const sampleStations = () => Array.from({ length: 1001 }, (_, i) => ({ stationuuid: `saved-${i}`, name: `Saved Radio ${i}`, url_resolved: `https://example.com/${i}`, votes: i, clickcount: i }));
     const snapshot = (savedAt = Date.now()) => ({ version: 1, savedAt, updatedAt: '2026-10-01T00:00:00Z', rankingsUpdatedAt: '2026-10-01T00:00:00Z', stations: sampleStations() });
-    await test('favorite backup v2 transfers playable metadata and accepts v1 and legacy', async () => {
+    await test('favorite backup v3 transfers playable metadata and accepts v1 and legacy', async () => {
         const station = sampleStations()[0];
         const payload = Core.createBackup([station.stationuuid], [], [station, { ...station, stationuuid: 'unrelated' }, { stationuuid: 'bad', name: 'Bad', url_resolved: 'javascript:alert(1)' }]);
         assert.equal(payload.savedStations.length, 1);
@@ -270,7 +401,7 @@ async function main() {
     await test('syntax and shared core wiring', () => {
         new vm.Script(app); new vm.Script(read('js/sonara-core.js')); new vm.Script(read('sw.js'));
         for (const pattern of [/js\/sonara-core\.js/, /SonaraCore\.createBackup/, /SonaraCore\.parseBackup/,
-            /SonaraCore\.lastStationSource/, /let activeRequestId = 0/, /SonaraCore\.nextHlsRecoveryAction/]) assert.match(html, pattern);
+            /SonaraCore\.lastStationSource/, /let activeRequestId = 0/, /SonaraCore\.createPlaybackController/]) assert.match(html, pattern);
         assert.doesNotMatch(app, /function (safeNumber|validateCustomStation|countryMatches)\(/);
     });
     await test('theme toggle persists and restores the selected mode', () => {
@@ -313,17 +444,14 @@ async function main() {
     await test('backup round trip and legacy import', () => {
         const payload = Core.createBackup([' abc ', 'abc', null], [{ stationuuid: 'custom_1', name: 'Mine', url_resolved: 'https://example.com', junk: 1 }]);
         const result = Core.parseBackup(JSON.stringify(payload));
-        assert.equal(payload.version, 2); assert.deepEqual(result.favorites, ['abc']);
+        assert.equal(payload.version, 3); assert.deepEqual(result.favorites, ['abc']);
         assert.equal(result.customStations.length, 1); assert.equal('junk' in result.customStations[0], false);
         assert.deepEqual(Core.parseBackup('["abc","abc","",null,123,"custom_test"]').favorites, ['abc', 'custom_test']);
         assert.throws(() => Core.parseBackup('{"version":2,"favorites":[],"customStations":[]}'));
     });
-    await test('country and HLS decisions use production core', () => {
+    await test('country decisions use production core', () => {
         assert(Core.countryMatches({ country: 'Germany', countrycode: 'DE' }, 'de'));
         assert(!Core.countryMatches({ country: 'Japan', countrycode: 'JP' }, 'de'));
-        assert.equal(Core.nextHlsRecoveryAction('NETWORK_ERROR', 0, 0), 'RECOVER_NETWORK');
-        assert.equal(Core.nextHlsRecoveryAction('NETWORK_ERROR', 2, 0), 'DESTROY');
-        assert.equal(Core.nextHlsRecoveryAction('MEDIA_ERROR', 0, 1), 'DESTROY');
     });
     await test('actual HLS handler stops after bounded recovery', () => {
         const rt = runtime();
@@ -343,8 +471,10 @@ async function main() {
             rt.context.setPlaybackState('playing');
             instance.handlers.error(null, { fatal: true, type: 'NETWORK_ERROR' });
             assert(rt.nodes.get('equalizer').classList.contains('paused-eq'));
+            assert(instance.destroyed);
+            rt.clock.advance(i === 0 ? 1500 : i === 1 ? 3000 : 0);
         }
-        assert.equal(instance.network, 2); assert(instance.destroyed);
+        assert.equal(instance.network, 0); assert(instance.destroyed);
         assert.equal(vm.runInContext('isPlaying', rt.context), false);
     });
     await test('runtime bootstrap restores custom station without API lookup', () => {
