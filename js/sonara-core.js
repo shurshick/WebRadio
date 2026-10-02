@@ -53,17 +53,37 @@
         try { return normalizeCustomStations(JSON.parse(raw)); } catch (_) { return []; }
     }
 
-    function createBackup(favorites, customStations) {
-        return { version: 1, favorites: normalizeStringArray(favorites), customStations: normalizeCustomStations(customStations) };
+    function normalizeSavedStations(input) {
+        const seen = new Set();
+        return (Array.isArray(input) ? input : []).map(s => {
+            if (!s || typeof s !== 'object') return null;
+            const id = validateFavoriteUuid(s.stationuuid);
+            const url = typeof s.url_resolved === 'string' ? s.url_resolved.trim() : '';
+            if (!id || seen.has(id) || typeof s.name !== 'string' || !s.name.trim() || !/^https?:\/\//i.test(url) || url.length > 2048) return null;
+            seen.add(id);
+            const result = { stationuuid: id, name: s.name.trim().slice(0, 256), url_resolved: url };
+            for (const key of ['favicon', 'tags', 'country', 'countrycode', 'state', 'codec']) result[key] = typeof s[key] === 'string' ? s[key].slice(0, key === 'favicon' ? 2048 : 512) : '';
+            result.bitrate = safeNumber(s.bitrate);
+            for (const key of ['votes', 'clickcount']) result[key] = typeof s[key] === 'number' && Number.isFinite(s[key]) && s[key] >= 0 ? s[key] : null;
+            return result;
+        }).filter(Boolean);
+    }
+
+    function createBackup(favorites, customStations, savedStations = []) {
+        const ids = normalizeStringArray(favorites);
+        return { version: 2, favorites: ids, customStations: normalizeCustomStations(customStations),
+            savedStations: normalizeSavedStations(savedStations).filter(s => ids.includes(s.stationuuid)) };
     }
 
     function parseBackup(raw) {
         const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
-        if (Array.isArray(data)) return { favorites: normalizeStringArray(data), customStations: [], legacy: true };
-        if (!data || data.version !== 1 || !Array.isArray(data.favorites) || !Array.isArray(data.customStations)) {
+        if (Array.isArray(data)) return { favorites: normalizeStringArray(data), customStations: [], savedStations: [], legacy: true };
+        if (!data || ![1, 2].includes(data.version) || !Array.isArray(data.favorites) || !Array.isArray(data.customStations) || (data.version === 2 && !Array.isArray(data.savedStations))) {
             throw new Error('Unsupported backup format');
         }
-        return { favorites: normalizeStringArray(data.favorites), customStations: normalizeCustomStations(data.customStations), legacy: false };
+        const favorites = normalizeStringArray(data.favorites);
+        return { favorites, customStations: normalizeCustomStations(data.customStations),
+            savedStations: normalizeSavedStations(data.savedStations).filter(s => favorites.includes(s.stationuuid)), legacy: false };
     }
 
     const COUNTRY_ALIASES = {
@@ -100,7 +120,41 @@
         return 'DESTROY';
     }
 
+    function createCatalogStore(indexedDB) {
+        async function transact(mode, value) {
+            if (!indexedDB) return null;
+            return new Promise(resolve => {
+                let db, tx, result = null, done = false;
+                const finish = output => {
+                    if (done) return;
+                    done = true; clearTimeout(timer);
+                    if (db) db.close();
+                    resolve(output);
+                };
+                const timer = setTimeout(() => { try { tx?.abort(); } catch {} finish(null); }, 3000);
+                try {
+                    const request = indexedDB.open('sonara-radio', 1);
+                    request.onupgradeneeded = () => request.result.createObjectStore('catalog');
+                    request.onerror = request.onblocked = () => finish(null);
+                    request.onsuccess = () => {
+                        db = request.result;
+                        if (done) { db.close(); return; }
+                        try {
+                            tx = db.transaction('catalog', mode);
+                            const store = tx.objectStore('catalog');
+                            const operation = mode === 'readonly' ? store.get('snapshot') : store.put(value, 'snapshot');
+                            operation.onsuccess = () => { result = mode === 'readonly' ? operation.result : true; };
+                            tx.oncomplete = () => finish(result);
+                            tx.onerror = tx.onabort = () => finish(null);
+                        } catch { finish(null); }
+                    };
+                } catch { finish(null); }
+            });
+        }
+        return { read: () => transact('readonly'), write: value => transact('readwrite', value) };
+    }
+
     return { safeNumber, validateFavoriteUuid, normalizeStringArray, validateCustomStation,
         normalizeCustomStations, parseStoredStringArray, parseStoredCustomStations,
-        createBackup, parseBackup, countryMatches, lastStationSource, nextHlsRecoveryAction };
+        normalizeSavedStations, createBackup, parseBackup, countryMatches, lastStationSource, nextHlsRecoveryAction, createCatalogStore };
 });

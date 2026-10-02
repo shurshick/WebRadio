@@ -19,4 +19,6 @@ jobs:
         node-version: '20'
 
     - name: Run Automated Test Suite
-      run: node tests/run-tests.js
+      run: |
+        npm ci
+        node tests/run-tests.js

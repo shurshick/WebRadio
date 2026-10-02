@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { IDBFactory } = require('fake-indexeddb');
 const Core = require('../js/sonara-core.js');
 const buildStandalone = require('../scripts/build-standalone.js');
 const { buildCatalog, buildRankings, main: updateCatalog } = require('../scripts/update-catalog.js');
@@ -13,7 +14,7 @@ const app = html.match(/<!-- JavaScript Application Logic -->\s*<script src="js\
 let passed = 0;
 async function test(name, fn) { await fn(); console.log('PASS', name); passed++; }
 
-function runtime(storageData = {}, fetchImpl = async () => ({ ok: true, json: async () => [] })) {
+function runtime(storageData = {}, fetchImpl = async () => ({ ok: true, json: async () => [] }), indexedDB) {
     const nodes = new Map(), listeners = {}, requests = [], store = new Map(Object.entries(storageData));
     function element(id = '') {
         if (nodes.has(id)) return nodes.get(id);
@@ -34,7 +35,7 @@ function runtime(storageData = {}, fetchImpl = async () => ({ ok: true, json: as
     const context = vm.createContext({ SonaraCore: Core, document, window, localStorage, navigator: {},
         console: { log() {}, warn() {}, error() {} },
         fetch: (...args) => { requests.push(args[0]); return fetchImpl(...args); },
-        AbortSignal, URL, setTimeout, clearTimeout, setInterval, clearInterval, Date, Math,
+        AbortSignal, URL, setTimeout, clearTimeout, setInterval, clearInterval, Date, Math, indexedDB,
         btoa: str => Buffer.from(str, 'binary').toString('base64'), encodeURIComponent, unescape,
         FileReader: class { readAsText(file) { this.onload({ target: { result: file.text } }); } } });
     vm.runInContext(app, context, { filename: 'index.html' });
@@ -42,6 +43,84 @@ function runtime(storageData = {}, fetchImpl = async () => ({ ok: true, json: as
 }
 
 async function main() {
+    const sampleStations = () => Array.from({ length: 1001 }, (_, i) => ({ stationuuid: `saved-${i}`, name: `Saved Radio ${i}`, url_resolved: `https://example.com/${i}`, votes: i, clickcount: i }));
+    const snapshot = (savedAt = Date.now()) => ({ version: 1, savedAt, updatedAt: '2026-10-01T00:00:00Z', rankingsUpdatedAt: '2026-10-01T00:00:00Z', stations: sampleStations() });
+    await test('favorite backup v2 transfers playable metadata and accepts v1 and legacy', async () => {
+        const station = sampleStations()[0];
+        const payload = Core.createBackup([station.stationuuid], [], [station, { ...station, stationuuid: 'unrelated' }, { stationuuid: 'bad', name: 'Bad', url_resolved: 'javascript:alert(1)' }]);
+        assert.equal(payload.savedStations.length, 1);
+        const rt = runtime({}, async () => { throw new Error('offline'); });
+        rt.context.importFavorites({ target: { files: [{ text: JSON.stringify(payload) }], value: '' } });
+        rt.requests.length = 0;
+        rt.context.switchTab('favorites');
+        await new Promise(resolve => setTimeout(resolve, 0));
+        assert.equal(vm.runInContext('stations[0].url_resolved', rt.context), station.url_resolved);
+        assert(!rt.requests.some(url => url.includes('/stations/byuuid')));
+        rt.context.playStation(station.stationuuid);
+        assert.equal(rt.nodes.get('audioElement')?.src || vm.runInContext('audioElement.src', rt.context), station.url_resolved);
+        assert.deepEqual(Core.parseBackup({ version: 1, favorites: ['old'], customStations: [] }).savedStations, []);
+        assert.deepEqual(Core.parseBackup(['old']).favorites, ['old']);
+    });
+    await test('migration protects favorites from the bounded recent station cache', () => {
+        const favorite = sampleStations()[0];
+        const rt = runtime({ auraradio_favorites: JSON.stringify([favorite.stationuuid]), auraradio_station_cache: JSON.stringify({ [favorite.stationuuid]: favorite }) });
+        for (let i = 1; i < 250; i++) rt.context.cacheStation({ stationuuid: `other-${i}`, name: 'Other', url_resolved: 'https://example.com/other' });
+        assert.equal(JSON.parse(rt.store.get('sonara_favorite_stations'))[0].stationuuid, favorite.stationuuid);
+        assert.equal(Object.keys(JSON.parse(rt.store.get('auraradio_station_cache'))).length, 200);
+    });
+    await test('catalog and ratings survive a new session with all sources unavailable', async () => {
+        const db = new IDBFactory();
+        assert(await Core.createCatalogStore(db).write(snapshot()));
+        const rt = runtime({}, async () => { throw new Error('offline'); }, db);
+        const result = await rt.context.fetchApi('/stations/topvote/100');
+        assert.equal(result[0].stationuuid, 'saved-1000');
+        assert.equal(result[0].votes, 1000);
+        assert.match(rt.nodes.get('catalogSourceStatus').textContent, /Сохранённый каталог.*рейтинг на/);
+        assert.equal(rt.requests.length, 3);
+    });
+    await test('saved catalog preview appears before API completion and live result wins', async () => {
+        const db = new IDBFactory();
+        await Core.createCatalogStore(db).write(snapshot());
+        let release;
+        const rt = runtime({}, () => new Promise(resolve => { release = () => resolve({ ok: true, json: async () => [{ stationuuid: 'live', name: 'Live', url_resolved: 'https://example.com/live' }] }); }), db);
+        const pending = rt.context.loadStations('explore');
+        await vm.runInContext('catalogReady', rt.context);
+        await new Promise(resolve => setTimeout(resolve, 0));
+        assert.equal(vm.runInContext('stations[0].stationuuid', rt.context), 'saved-1000');
+        release(); await pending;
+        assert.equal(vm.runInContext('stations[0].stationuuid', rt.context), 'live');
+        assert.match(rt.nodes.get('catalogSourceStatus').textContent, /API/);
+    });
+    await test('stale cache refresh preserves last ratings when ratings request fails', async () => {
+        const db = new IDBFactory();
+        await Core.createCatalogStore(db).write(snapshot(0));
+        const rt = runtime({}, async url => ({ ok: !url.includes('api.radio-browser.info') && !url.endsWith('rankings.json'), status: 503, json: async () => ({ updatedAt: '2026-10-02T00:00:00Z', stations: sampleStations().map(s => ({ ...s, votes: 0, clickcount: 0 })) }) }), db);
+        await rt.context.loadStaticCatalog();
+        await rt.context.refreshStaticCatalog();
+        const stored = await Core.createCatalogStore(db).read();
+        assert.equal(stored.updatedAt, '2026-10-02T00:00:00Z');
+        assert.equal(stored.rankingsUpdatedAt, '2026-10-01T00:00:00Z');
+        assert.equal(stored.stations[10].votes, 10);
+        assert(stored.savedAt > 0);
+    });
+    await test('denied storage, corrupt cache and refresh failures leave fallback usable', async () => {
+        assert.equal(await Core.createCatalogStore({ open() { throw new Error('denied'); } }).read(), null);
+        const db = new IDBFactory();
+        await Core.createCatalogStore(db).write({ version: 1, savedAt: 1, stations: [{ name: 'corrupt' }] });
+        const rt = runtime({}, async () => { throw new Error('offline'); }, db);
+        const result = await rt.context.fetchApi('/stations/search?name=Relax');
+        assert.equal(result[0].name, 'Relax FM');
+        assert.equal((await Core.createCatalogStore(db).read()).stations[0].name, 'corrupt');
+    });
+    await test('an older server catalog cannot replace a newer saved snapshot', async () => {
+        const db = new IDBFactory();
+        const previous = snapshot(0);
+        await Core.createCatalogStore(db).write(previous);
+        const rt = runtime({}, async () => ({ ok: true, json: async () => ({ updatedAt: '2026-09-01T00:00:00Z', stations: sampleStations() }) }), db);
+        await vm.runInContext('catalogReady', rt.context);
+        await assert.rejects(rt.context.refreshStaticCatalog(), /unavailable/);
+        assert.deepEqual(await Core.createCatalogStore(db).read(), previous);
+    });
     await test('catalog export keeps valid playable stations and rejects incomplete snapshots', () => {
         const input = Array.from({ length: 1001 }, (_, i) => ({ stationuuid: `id-${i}`, name: `Station ${i}`, url_stream: `https://example.com/${i}`, iso_3166_1: 'RU', url_favicon: 'https://example.com/icon.png' }));
         input.push({ ...input[0] }, { stationuuid: 'broken', name: 'Broken', url: 'javascript:alert(1)' });
@@ -163,7 +242,7 @@ async function main() {
         assert.match(portable, /data:application\/octet-stream;base64,/);
         assert.doesNotMatch(portable, /src="(?:js\/sonara-core|vendor\/hls\.min)\.js"/);
         assert.doesNotMatch(portable, /href="manifest\.json"|register\('sw\.js'\)/);
-        assert.match(portable, /Sonara Radio v2\.3\.5/);
+        assert(portable.includes(html.match(/Sonara Radio v\d+\.\d+\.\d+/)[0]));
     });
     await test('storage validation calls production helpers', () => {
         assert.deepEqual(Core.parseStoredStringArray('broken'), []);
@@ -180,7 +259,7 @@ async function main() {
     await test('backup round trip and legacy import', () => {
         const payload = Core.createBackup([' abc ', 'abc', null], [{ stationuuid: 'custom_1', name: 'Mine', url_resolved: 'https://example.com', junk: 1 }]);
         const result = Core.parseBackup(JSON.stringify(payload));
-        assert.equal(payload.version, 1); assert.deepEqual(result.favorites, ['abc']);
+        assert.equal(payload.version, 2); assert.deepEqual(result.favorites, ['abc']);
         assert.equal(result.customStations.length, 1); assert.equal('junk' in result.customStations[0], false);
         assert.deepEqual(Core.parseBackup('["abc","abc","",null,123,"custom_test"]').favorites, ['abc', 'custom_test']);
         assert.throws(() => Core.parseBackup('{"version":2,"favorites":[],"customStations":[]}'));

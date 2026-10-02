@@ -25,8 +25,6 @@ remove_*.js
 temp.js
 output.css
 input.css
-package.json
-package-lock.json
 tailwind.config.js
 logo-b64.txt
 verify*.js

@@ -532,7 +532,7 @@
                 </div>
                 <div>
                     <h3 class="font-bold text-lg text-white">О приложении</h3>
-                    <p class="text-xs text-gray-400">Sonara Radio v2.3.5</p>
+                    <p class="text-xs text-gray-400">Sonara Radio v2.4.0</p>
                 </div>
             </div>
             <p class="text-sm text-gray-300 leading-relaxed mb-4">
@@ -617,7 +617,8 @@
         function safelyUpdateDOM(updateFn) {
             if (document.startViewTransition) {
                 try {
-                    document.startViewTransition(updateFn);
+                    const transition = document.startViewTransition(updateFn);
+                    transition.ready.catch(() => {}); // Rapid catalog updates may skip an animation.
                 } catch (e) {
                     updateFn();
                 }
@@ -738,8 +739,24 @@
             } catch { return {}; }
         }
 
+        function loadSavedFavorites() {
+            try { return SonaraCore.normalizeSavedStations(JSON.parse(localStorage.getItem('sonara_favorite_stations') || '[]')); }
+            catch { return []; }
+        }
+        let savedFavorites = loadSavedFavorites();
+        function saveFavoriteStation(station) {
+            if (!favorites.includes(station?.stationuuid)) return;
+            const valid = SonaraCore.normalizeSavedStations([station])[0];
+            if (!valid) return;
+            savedFavorites = [...savedFavorites.filter(s => s.stationuuid !== valid.stationuuid), valid];
+            try { localStorage.setItem('sonara_favorite_stations', JSON.stringify(savedFavorites)); }
+            catch (error) { showToast('Не удалось сохранить станцию: хранилище браузера заполнено'); }
+        }
+        for (const station of Object.values(loadCachedStations())) saveFavoriteStation(station);
+
         function cacheStation(station) {
             if (!station?.stationuuid || !station.name || !station.url_resolved) return;
+            saveFavoriteStation(station);
             try {
                 const cache = loadCachedStations();
                 cache[station.stationuuid] = {
@@ -770,6 +787,23 @@
         ];
         let catalogPromise;
         let staticRankingsUpdatedAt = null;
+        let cachedCatalog = null;
+        let catalogSource = 'local';
+        let catalogPreview = null;
+        let catalogRetryAfter = 0;
+        const catalogStore = SonaraCore.createCatalogStore(globalThis.indexedDB);
+        function validCatalogSnapshot(value) {
+            return value?.version === 1 && Number.isFinite(value.savedAt) && Array.isArray(value.stations) && value.stations.length > 1000
+                && value.stations.every(s => s && typeof s.stationuuid === 'string' && typeof s.name === 'string' && typeof s.url_resolved === 'string' && /^https?:\/\//i.test(s.url_resolved));
+        }
+        const catalogReady = catalogStore.read().then(value => {
+            if (validCatalogSnapshot(value)) {
+                cachedCatalog = value;
+                staticRankingsUpdatedAt = value.rankingsUpdatedAt || null;
+                for (const station of value.stations) if (favorites.includes(station.stationuuid)) saveFavoriteStation(station);
+            }
+            return cachedCatalog;
+        }).catch(() => null);
         function mergeSnapshotRankings(stations, rankings) {
             const scores = new Map();
             if (rankings?.version === 1 && Number.isFinite(Date.parse(rankings.updatedAt)) && Array.isArray(rankings.stations)) {
@@ -788,37 +822,86 @@
 
         function setCatalogSourceStatus(source, requestId) {
             if (requestId !== activeRequestId) return;
+            catalogSource = source;
             const node = document.getElementById('catalogSourceStatus');
             if (!node) return;
             node.textContent = source === 'api' ? 'Radio Browser API · текущий рейтинг'
-                : source === 'static' ? (staticRankingsUpdatedAt ? `Резервный каталог · рейтинг на ${new Date(staticRankingsUpdatedAt).toLocaleDateString('ru-RU')}` : 'Резервный каталог · рейтинг недоступен')
+                : source === 'favorites' ? 'Сохранённое избранное · прямые адреса станций'
+                : source === 'static' || source === 'cache' ? `${source === 'cache' ? 'Сохранённый каталог' : 'Резервный каталог'}${cachedCatalog?.updatedAt ? ' · база на ' + new Date(cachedCatalog.updatedAt).toLocaleDateString('ru-RU') : ''} · ${staticRankingsUpdatedAt ? 'рейтинг на ' + new Date(staticRankingsUpdatedAt).toLocaleDateString('ru-RU') : 'рейтинг недоступен'}`
                 : 'Локальная подборка · рейтинг недоступен';
         }
 
-        async function loadStaticCatalog() {
+        async function refreshStaticCatalog() {
             if (!catalogPromise) {
+                if (Date.now() < catalogRetryAfter) throw new Error('Catalog refresh cooldown');
+                const requestId = activeRequestId;
                 catalogPromise = (async () => {
                     for (const url of CATALOG_URLS) {
                         try {
-                            const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
+                            const response = await fetch(url, { signal: AbortSignal.timeout(15000) });
                             if (!response.ok) continue;
                             const data = await response.json();
                             if (Array.isArray(data.stations) && data.stations.length > 1000) {
+                                if (!validCatalogSnapshot({ version: 1, savedAt: Date.now(), stations: data.stations })) continue;
+                                if (cachedCatalog?.updatedAt && Date.parse(data.updatedAt) < Date.parse(cachedCatalog.updatedAt)) continue;
                                 let rankings = null;
                                 try {
                                     const rankResponse = await fetch(url.replace(/stations\.json$/, 'rankings.json'), { signal: AbortSignal.timeout(3000) });
                                     if (rankResponse.ok) rankings = await rankResponse.json();
                                 } catch (error) { console.warn('Ranking snapshot unavailable:', error); }
                                 const merged = mergeSnapshotRankings(data.stations, rankings);
+                                // A failed rating request must not erase the previous valid scores.
+                                if (cachedCatalog?.rankingsUpdatedAt && (!merged.updatedAt || Date.parse(merged.updatedAt) < Date.parse(cachedCatalog.rankingsUpdatedAt))) {
+                                    const previous = mergeSnapshotRankings(data.stations, { version: 1, updatedAt: cachedCatalog.rankingsUpdatedAt, stations: cachedCatalog.stations });
+                                    merged.stations = previous.stations;
+                                    merged.updatedAt = previous.updatedAt;
+                                }
                                 staticRankingsUpdatedAt = merged.updatedAt;
+                                cachedCatalog = { version: 1, savedAt: Date.now(), updatedAt: Number.isFinite(Date.parse(data.updatedAt)) ? data.updatedAt : null, rankingsUpdatedAt: merged.updatedAt, stations: merged.stations };
+                                for (const station of merged.stations) if (favorites.includes(station.stationuuid)) saveFavoriteStation(station);
+                                const persisted = await catalogStore.write(cachedCatalog);
+                                if (!persisted && globalThis.indexedDB) showToast('Каталог загружен, но браузер не смог сохранить его');
+                                if (requestId === activeRequestId && catalogSource === 'cache' && catalogPreview?.requestId === requestId) {
+                                    renderCatalogPreview(catalogPreview.paths, merged.stations, requestId);
+                                }
                                 return merged.stations;
                             }
                         } catch (error) { console.warn('Static catalog unavailable:', error); }
                     }
                     throw new Error('Static catalog unavailable');
-                })();
+                })().catch(error => {
+                    catalogPromise = null;
+                    catalogRetryAfter = Date.now() + 60_000;
+                    throw error;
+                });
             }
             return catalogPromise;
+        }
+
+        async function loadStaticCatalog() {
+            await catalogReady;
+            if (cachedCatalog) {
+                staticRankingsUpdatedAt = cachedCatalog.rankingsUpdatedAt;
+                if (Date.now() - cachedCatalog.savedAt > 6 * 60 * 60 * 1000) refreshStaticCatalog().catch(() => {});
+                return cachedCatalog.stations;
+            }
+            return refreshStaticCatalog();
+        }
+
+        // Preview local data while the live API request continues with its normal priority.
+        function previewCachedCatalog(paths, requestId, isFinished) {
+            catalogPreview = { paths, requestId };
+            catalogReady.then(snapshot => {
+                if (!snapshot || requestId !== activeRequestId || isFinished()) return;
+                renderCatalogPreview(paths, snapshot.stations, requestId);
+            });
+        }
+        function renderCatalogPreview(paths, catalog, requestId) {
+            const unique = new Map();
+            for (const path of paths) for (const station of queryCatalog(path, catalog)) unique.set(station.stationuuid, station);
+            allLoadedStations = [...unique.values()];
+            setCatalogSourceStatus('cache', requestId);
+            applyFilterAndSort();
         }
 
         function queryCatalog(path, catalog) {
@@ -837,7 +920,7 @@
                 const ids = url.searchParams.get('uuids')?.split(',') || (url.pathname.split('/')[3] ? [decodeURIComponent(url.pathname.split('/')[3])] : []);
                 const found = new Map(catalog.filter(s => ids.includes(s.stationuuid)).map(s => [s.stationuuid, s]));
                 const cache = loadCachedStations();
-                return ids.map(id => found.get(id) || cache[id]).filter(Boolean);
+                return ids.map(id => found.get(id) || savedFavorites.find(s => s.stationuuid === id) || cache[id]).filter(Boolean);
             }
             if (path.startsWith('/stations/bytag/')) {
                 const tag = decodeURIComponent(path.split('?')[0].split('/')[3] || '').toLowerCase();
@@ -883,7 +966,11 @@
                         const data = await response.json();
                         preferredApiMirror = baseUrl;
                         apiUnavailableUntil = 0;
+                        if (Array.isArray(data) && path.startsWith('/stations/')) for (const station of data) saveFavoriteStation(station);
                         setCatalogSourceStatus('api', requestId);
+                        if (globalThis.indexedDB) catalogReady.then(() => {
+                            if (!cachedCatalog || Date.now() - cachedCatalog.savedAt > 6 * 60 * 60 * 1000) refreshStaticCatalog().catch(() => {});
+                        });
                         return path.startsWith('/stations/byuuid') ? queryCatalog(path, data) : data;
                     } catch (err) {
                         console.warn(`Mirror ${baseUrl} failed:`, err.message);
@@ -893,7 +980,7 @@
             }
             try {
                 const data = queryCatalog(path, await loadStaticCatalog());
-                setCatalogSourceStatus('static', requestId);
+                setCatalogSourceStatus(cachedCatalog ? 'cache' : 'static', requestId);
                 return data;
             }
             catch (error) { console.warn('Falling back to built-in stations:', error); }
@@ -956,11 +1043,20 @@
                 updateMediaSession(currentStation);
                 playerStatusText.textContent = 'Готово к воспроизведению';
             } else if (savedSource.kind === 'catalog') {
+                const saved = savedFavorites.find(s => s.stationuuid === savedSource.id) || loadCachedStations()[savedSource.id];
+                if (saved) {
+                    currentStation = saved;
+                    updatePlayerInfo(saved);
+                    updateMediaSession(saved);
+                    playerStatusText.textContent = 'Готово к воспроизведению';
+                }
                 fetchApi(`/stations/byuuid/${encodeURIComponent(savedSource.id)}`)
                     .then(data => {
                         if (data && data.length > 0) {
                             // Don't autoplay on load, just set station info
+                            if (currentStation && currentStation.stationuuid !== savedSource.id) return;
                             currentStation = data[0];
+                            cacheStation(currentStation);
                             updatePlayerInfo(currentStation);
                             updateMediaSession(currentStation);
                             playerStatusText.textContent = 'Готово к воспроизведению';
@@ -1178,8 +1274,12 @@
                 if (sortSelect) sortSelect.value = currentSort;
             }
 
+            let finished = false;
+            previewCachedCatalog([endpoint], reqId, () => finished);
+
             try {
                 const data = await fetchApi(endpoint);
+                finished = true;
                 if (reqId !== activeRequestId) return;
                 allLoadedStations = data.filter(s => s.url_resolved && s.name);
                 if (type !== 'random') {
@@ -1189,6 +1289,7 @@
                 }
                 applyFilterAndSort();
             } catch (err) {
+                finished = true;
                 if (reqId !== activeRequestId) return;
                 console.error('Failed to load stations:', err);
                 showError();
@@ -1207,6 +1308,8 @@
 
             setSectionTitle('fa-solid fa-magnifying-glass text-neon-cyan', 'Результаты поиска: "' + query + '"');
             sectionSubtitle.textContent = 'Поиск по названию и тегам в каталоге';
+            let finished = false;
+            previewCachedCatalog([`/stations/search?name=${encodeURIComponent(query)}&limit=60`, `/stations/search?tag=${encodeURIComponent(query)}&limit=40`], reqId, () => finished);
 
             try {
                 const encoded = encodeURIComponent(query);
@@ -1214,6 +1317,7 @@
                     fetchApi(`/stations/search?name=${encoded}&limit=60`).catch(() => []),
                     fetchApi(`/stations/search?tag=${encoded}&limit=40`).catch(() => [])
                 ]);
+                finished = true;
 
                 if (reqId !== activeRequestId || currentTab !== 'search') return;
 
@@ -1229,6 +1333,7 @@
                 allLoadedStations = combined;
                 applyFilterAndSort();
             } catch (err) {
+                finished = true;
                 if (reqId !== activeRequestId || currentTab !== 'search') return;
                 console.error('Search failed:', err);
                 showError();
@@ -1251,13 +1356,17 @@
 
             setSectionTitle('fa-solid fa-tag text-neon-pink', 'Тег: #' + tag);
             sectionSubtitle.textContent = `Радиостанции в жанре ${tag}`;
+            let finished = false;
+            previewCachedCatalog([`/stations/bytag/${encodeURIComponent(tag)}?limit=80`], reqId, () => finished);
 
             try {
                 const data = await fetchApi(`/stations/bytag/${encodeURIComponent(tag)}?limit=80`);
+                finished = true;
                 if (reqId !== activeRequestId || currentTab !== 'tag') return;
                 allLoadedStations = data.filter(s => s.url_resolved && s.name);
                 applyFilterAndSort();
             } catch (err) {
+                finished = true;
                 if (reqId !== activeRequestId || currentTab !== 'tag') return;
                 console.error('Filter by tag failed:', err);
                 showError();
@@ -1330,14 +1439,21 @@
             try {
                 const apiUuids = favorites.filter(uuid => !uuid.startsWith('custom_'));
                 const customUuids = favorites.filter(uuid => uuid.startsWith('custom_'));
-                let data = [];
-                if (apiUuids.length > 0) {
-                    data = await fetchApi(`/stations/byuuid?uuids=${apiUuids.join(',')}`);
+                let data = savedFavorites.filter(s => apiUuids.includes(s.stationuuid));
+                const customData = customStations.filter(s => customUuids.includes(s.stationuuid));
+                allLoadedStations = [...data, ...customData];
+                setCatalogSourceStatus('favorites', reqId);
+                applyFilterAndSort();
+                const missing = apiUuids.filter(id => !data.some(s => s.stationuuid === id));
+                if (missing.length > 0) {
+                    const fetched = await fetchApi(`/stations/byuuid?uuids=${missing.join(',')}`);
+                    for (const station of fetched) saveFavoriteStation(station);
+                    data = [...data, ...fetched];
                 }
                 if (reqId !== activeRequestId || currentTab !== 'favorites') return;
-                const customData = customStations.filter(s => customUuids.includes(s.stationuuid));
                 allLoadedStations = [...data.filter(s => s.url_resolved && s.name), ...customData];
                 applyFilterAndSort();
+                if (apiUuids.some(id => !data.some(s => s.stationuuid === id))) showToast('Часть старого избранного пока недоступна. Данные восстановятся при доступном каталоге');
             } catch (err) {
                 if (reqId !== activeRequestId || currentTab !== 'favorites') return;
                 console.error('Failed to load favorites:', err);
@@ -1677,6 +1793,8 @@
             const index = favorites.indexOf(uuid);
             if (index > -1) {
                 favorites.splice(index, 1);
+                savedFavorites = savedFavorites.filter(s => s.stationuuid !== uuid);
+                localStorage.setItem('sonara_favorite_stations', JSON.stringify(savedFavorites));
             } else {
                 favorites.push(uuid);
                 cacheStation(stations.find(s => s.stationuuid === uuid) || currentStation);
@@ -1966,7 +2084,7 @@
                 showToast('Нет данных для экспорта');
                 return;
             }
-            const payload = SonaraCore.createBackup(favorites, customStations);
+            const payload = SonaraCore.createBackup(favorites, customStations, savedFavorites);
             const dataStr = "data:application/json;charset=utf-8," + encodeURIComponent(JSON.stringify(payload, null, 2));
             const downloadAnchor = document.createElement('a');
             downloadAnchor.setAttribute("href", dataStr);
@@ -1974,7 +2092,8 @@
             document.body.appendChild(downloadAnchor);
             downloadAnchor.click();
             downloadAnchor.remove();
-            showToast('Резервная копия экспортирована');
+            const unresolved = payload.favorites.filter(id => !payload.savedStations.some(s => s.stationuuid === id) && !payload.customStations.some(s => s.stationuuid === id)).length;
+            showToast(unresolved ? `Копия экспортирована. Для ${unresolved} старых станций ещё нужно восстановить адреса из каталога` : 'Резервная копия экспортирована');
         }
 
         function importFavorites(event) {
@@ -1986,6 +2105,7 @@
                     const imported = SonaraCore.parseBackup(e.target.result);
                     favorites = SonaraCore.normalizeStringArray([...favorites, ...imported.favorites]);
                     customStations = SonaraCore.normalizeCustomStations([...customStations, ...imported.customStations]);
+                    for (const station of imported.savedStations) saveFavoriteStation(station);
                     localStorage.setItem('auraradio_favorites', JSON.stringify(favorites));
                     localStorage.setItem('auraradio_custom', JSON.stringify(customStations));
                     updateFavCountBadge();
