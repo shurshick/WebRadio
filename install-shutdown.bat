@@ -18,7 +18,7 @@ reg add "HKCU\Software\Classes\sonarashutdown\shell\open\command" /ve /t REG_SZ 
 :: Создаём VBS-helper с подтверждением и задержкой 30 сек
 > "%VBS%" echo Set shell = CreateObject("WScript.Shell")
 >> "%VBS%" echo Dim res
->> "%VBS%" echo res = shell.Popup("Sonara Radio: таймер сна завершён." ^& Chr(13) ^& Chr(10) ^& "Выключить компьютер через 30 секунд?" ^& Chr(13) ^& Chr(10) ^& Chr(13) ^& Chr(10) ^& "Нажмите ОК для подтверждения или Отмена.", 25, "Sonara Radio — Автовыключение", 1)
+>> "%VBS%" echo res = shell.Popup("Sonara Radio: таймер сна завершён." ^& Chr(13) ^& Chr(10) ^& "Выключить компьютер через 30 секунд?" ^& Chr(13) ^& Chr(10) ^& "Windows может принудительно закрыть приложения. Сохраните работу." ^& Chr(13) ^& Chr(10) ^& "Нажмите ОК для подтверждения или Отмена.", 25, "Sonara Radio — Автовыключение", 1)
 >> "%VBS%" echo If res = 1 Then
 >> "%VBS%" echo     shell.Run "shutdown /s /t 30", 0, False
 >> "%VBS%" echo Else

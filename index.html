@@ -259,7 +259,7 @@
 
             <div class="mt-auto pt-4 border-t border-gray-800/80 px-2 text-xs text-gray-500">
                 <p>Данные предоставлены <a href="https://www.radio-browser.info/" target="_blank" class="text-neon-cyan hover:underline">Radio Browser API</a></p>
-                <p class="mt-1">Стабильный открытый каталог радиостанций со всего мира.</p>
+                <p class="mt-1">Открытый каталог радиостанций со всего мира.</p>
                 <img id="footerLogo" alt="Sonara Radio" class="w-full h-auto object-contain mt-3 mx-auto rounded-xl border border-gray-700/50 bg-dark-700/60 shadow-lg shadow-neon-cyan/10">
                 <p id="copyrightText" class="mt-2 text-center">© Коваленко Александр, 2026</p>
             </div>
@@ -314,7 +314,7 @@
                 <div class="flex items-center space-x-2 text-xs">
                     <span class="text-gray-400"><i class="fa-solid fa-arrow-down-wide-short mr-1"></i> Сортировка:</span>
                     <select id="sortSelect" onchange="sortStations(this.value)" class="bg-dark-700 text-gray-200 border border-gray-700 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-neon-cyan">
-                        <option value="clicks">По прослушиваниям</option>
+                        <option value="clicks">По кликам Radio Browser</option>
                         <option value="votes">По голосам</option>
                         <option value="name">По алфавиту (А-Я)</option>
                         <option value="bitrate">По битрейту, если известен</option>
@@ -408,7 +408,7 @@
 
                 <!-- Equalizer Animation & Status Text -->
                 <div class="flex items-center space-x-3">
-                    <div id="equalizer" class="flex items-end space-x-1 h-5 paused-eq">
+                    <div id="equalizer" class="flex items-end space-x-1 h-5 paused-eq" role="img" aria-label="Воспроизведение не начато" title="Индикатор состояния плеера; не анализирует звук">
                         <div class="equalizer-bar rounded-t"></div>
                         <div class="equalizer-bar rounded-t"></div>
                         <div class="equalizer-bar rounded-t"></div>
@@ -492,13 +492,13 @@
             <p class="text-sm text-gray-300 leading-relaxed mb-4">
                 Браузер не может выключить компьютер напрямую. Для автоматического выключения один раз установите
                 связку <b class="text-white">Sonara-Shutdown</b>: страница скачает установщик, вы запустите его — и дальше
-                всё работает автоматически.
+                при завершении таймера подтвердите выключение в браузере и системном окне Windows.
             </p>
             <button onclick="downloadShutdownInstaller()" class="w-full py-2.5 bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-400 rounded-xl text-sm font-medium transition-all border border-cyan-500/40 mb-2">
                 <i class="fa-solid fa-download mr-1"></i> Скачать установщик
             </button>
             <button onclick="triggerShutdownNow()" class="w-full py-2.5 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-xl text-sm font-medium transition-all border border-red-500/40 mb-2">
-                <i class="fa-solid fa-power-off mr-1"></i> Выключить сейчас
+                <i class="fa-solid fa-power-off mr-1"></i> Запросить выключение
             </button>
             <button onclick="closeShutdownModal()" class="w-full py-2.5 bg-dark-700 hover:bg-dark-600 text-white rounded-xl text-sm font-medium transition-all border border-gray-700">
                 Отмена
@@ -532,7 +532,7 @@
                 </div>
                 <div>
                     <h3 class="font-bold text-lg text-white">О приложении</h3>
-                    <p class="text-xs text-gray-400">Sonara Radio v2.4.0</p>
+                    <p class="text-xs text-gray-400">Sonara Radio v2.4.1</p>
                 </div>
             </div>
             <p class="text-sm text-gray-300 leading-relaxed mb-4">
@@ -1107,22 +1107,18 @@
 
             // Audio Events
             audioElement.addEventListener('playing', () => {
-                isPlaying = true;
                 consecutiveStreamErrors = 0;
-                updatePlayButtonState();
-                playerStatusText.textContent = 'В эфире (LIVE)';
-                liveBadge.className = 'absolute -top-1 -right-1 w-4 h-4 bg-neon-emerald rounded-full border-2 border-dark-800 flex items-center justify-center pulse-live';
-                equalizer.classList.remove('paused-eq');
+                setPlaybackState('playing');
             });
 
             audioElement.addEventListener('waiting', () => {
-                playerStatusText.textContent = 'Буферизация...';
-                liveBadge.className = 'absolute -top-1 -right-1 w-4 h-4 bg-yellow-500 rounded-full border-2 border-dark-800 flex items-center justify-center';
+                setPlaybackState('loading');
             });
+            audioElement.addEventListener('ended', () => setPlaybackState('ended'));
+            audioElement.addEventListener('emptied', () => setPlaybackState('stopped'));
 
             audioElement.addEventListener('error', (e) => {
-                isPlaying = false;
-                updatePlayButtonState();
+                setPlaybackState('error');
                 playerStatusText.textContent = 'Ошибка потока, переключение...';
                 liveBadge.className = 'absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full border-2 border-dark-800 flex items-center justify-center';
                 const eqDiv = document.getElementById('equalizer');
@@ -1143,11 +1139,7 @@
                 }, 1500);
             });
             audioElement.addEventListener('pause', () => {
-                isPlaying = false;
-                updatePlayButtonState();
-                playerStatusText.textContent = 'Пауза';
-                liveBadge.className = 'absolute -top-1 -right-1 w-4 h-4 bg-gray-500 rounded-full border-2 border-dark-800 flex items-center justify-center';
-                equalizer.classList.add('paused-eq');
+                setPlaybackState('paused');
             });
 
             
@@ -1383,7 +1375,7 @@
             const countrySelect = document.getElementById('countrySelect');
             if (countrySelect) countrySelect.value = '';
             sectionTitle.innerHTML = `<i class="fa-solid fa-clock-rotate-left text-neon-blue"></i><span>Недавно играли</span>`;
-            sectionSubtitle.textContent = 'История прослушиваний (последние 20)';
+            sectionSubtitle.textContent = 'Последние 20 запусков станций';
 
             if (playHistory.length === 0) {
                 stations = [];
@@ -1507,7 +1499,7 @@
             const safeName = escapeHTML(station.name);
             const safeCountry = escapeHTML(station.country || 'World');
             const safeState = escapeHTML(station.state);
-            const safeCodec = escapeHTML(station.codec || 'MP3');
+            const safeCodec = escapeHTML(station.codec || '—');
             const numBitrate = safeNumber(station.bitrate, 0);
             const safeBitrate = numBitrate > 0 ? numBitrate + 'k' : '';
             const safeUrl = escapeHTML(station.url_resolved);
@@ -1565,8 +1557,8 @@
             const reqId = ++activeRequestId;
             showLoading(true);
             currentTab = 'genres-list';
-            sectionTitle.innerHTML = `<i class="fa-solid fa-list-ul text-neon-purple"></i><span>Все радиостанции по жанрам</span>`;
-            sectionSubtitle.textContent = 'Список радиостанций, разделенный по ключевым музыкальным направлениям';
+            sectionTitle.innerHTML = `<i class="fa-solid fa-list-ul text-neon-purple"></i><span>Подборки по жанрам</span>`;
+            sectionSubtitle.textContent = 'До 16 станций в каждом из восьми жанров';
 
             const mainGenres = [
                 { id: 'pop', name: 'Pop (Поп)' },
@@ -1611,7 +1603,7 @@
                                         <span>${genre.name}</span>
                                     </h3>
                                     <button onclick="filterByTag('${genre.id}')" class="text-xs text-neon-cyan hover:underline flex items-center space-x-1">
-                                        <span>Все в категории</span>
+                                        <span>Больше станций</span>
                                         <i class="fa-solid fa-arrow-right text-[10px]"></i>
                                     </button>
                                 </div>
@@ -1651,7 +1643,20 @@
         let hlsInstance = null;
         let hlsNetworkRecoveryAttempts = 0;
         let hlsMediaRecoveryAttempts = 0;
+        function setPlaybackState(state) {
+            const messages = { playing: 'В эфире (LIVE)', loading: 'Буферизация...', paused: 'Пауза', stopped: 'Остановлено', ended: 'Поток завершён', error: 'Ошибка воспроизведения потока' };
+            isPlaying = state === 'playing' || state === 'loading';
+            updatePlayButtonState();
+            playerStatusText.textContent = messages[state];
+            equalizer.classList[state === 'playing' ? 'remove' : 'add']('paused-eq');
+            equalizer.setAttribute('aria-label', messages[state]);
+            const color = state === 'playing' ? 'bg-neon-emerald' : state === 'loading' ? 'bg-yellow-500' : state === 'error' ? 'bg-red-500' : 'bg-gray-500';
+            liveBadge.className = `absolute -top-1 -right-1 w-4 h-4 ${color} rounded-full border-2 border-dark-800 flex items-center justify-center${state === 'playing' ? ' pulse-live' : ''}`;
+            if ('mediaSession' in navigator) navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
+        }
         function playStreamUrl(url) {
+            audioElement.pause();
+            setPlaybackState('loading');
             if (hlsInstance) {
                 hlsInstance.destroy();
                 hlsInstance = null;
@@ -1664,9 +1669,10 @@
                 instance.loadSource(url);
                 instance.attachMedia(audioElement);
                 instance.on(Hls.Events.MANIFEST_PARSED, () => {
+                    if (hlsInstance !== instance) return;
                     audioElement.play().catch(err => {
                         console.error('Playback error:', err);
-                        playerStatusText.textContent = 'Ошибка воспроизведения потока';
+                        if (hlsInstance === instance) setPlaybackState('error');
                     });
                 });
                 instance.on(Hls.Events.ERROR, (_event, data) => {
@@ -1674,28 +1680,30 @@
                     const action = SonaraCore.nextHlsRecoveryAction(
                         data.type, hlsNetworkRecoveryAttempts, hlsMediaRecoveryAttempts);
                     if (action === 'RECOVER_NETWORK') {
+                        setPlaybackState('loading');
                         hlsNetworkRecoveryAttempts++;
                         instance.startLoad();
                     } else if (action === 'RECOVER_MEDIA') {
+                        setPlaybackState('loading');
                         hlsMediaRecoveryAttempts++;
                         instance.recoverMediaError();
                     } else {
                         instance.destroy();
                         hlsInstance = null;
-                        playerStatusText.textContent = 'Ошибка воспроизведения потока';
+                        setPlaybackState('error');
                     }
                 });
             } else {
                 audioElement.src = url;
                 audioElement.play().catch(err => {
                     console.error('Playback error:', err);
-                    playerStatusText.textContent = 'Ошибка воспроизведения потока';
+                    if (audioElement.getAttribute('src') === url) setPlaybackState('error');
                 });
             }
         }
 
         function playStation(uuid) {
-            const station = stations.find(s => s.stationuuid === uuid) || currentStation;
+            const station = stations.find(s => s.stationuuid === uuid) || customStations.find(s => s.stationuuid === uuid) || savedFavorites.find(s => s.stationuuid === uuid) || (currentStation?.stationuuid === uuid ? currentStation : null);
             if(station) addToHistory(station.stationuuid);
             if (!station) return;
             cacheStation(station);
@@ -1721,7 +1729,8 @@
             playerStationName.textContent = station.name;
             playerStationMeta.textContent = `${station.country || ''} ${station.tags ? '• ' + station.tags.split(',')[0] : ''}`;
             playerFavicon.src = station.favicon && station.favicon.trim() !== '' ? station.favicon : getFallbackSVG(station.name);
-            playerCodec.textContent = station.codec || 'MP3';
+            playerFavicon.dataset.failed = '0';
+            playerCodec.textContent = station.codec || '—';
             const nb = safeNumber(station.bitrate, 0); playerBitrate.textContent = nb > 0 ? nb + ' kbps' : '-- kbps';
 
             const isFav = favorites.includes(station.stationuuid);
@@ -1753,11 +1762,7 @@
             }
             audioElement.removeAttribute("src");
             audioElement.load();
-            isPlaying = false;
-            updatePlayButtonState();
-            playerStatusText.textContent = 'Остановлено';
-            liveBadge.className = 'absolute -top-1 -right-1 w-4 h-4 bg-gray-500 rounded-full border-2 border-dark-800 flex items-center justify-center';
-            equalizer.classList.add('paused-eq');
+            setPlaybackState('stopped');
         }
 
         // Update Play Button Icon
@@ -1787,6 +1792,35 @@
         }
 
         // Toggle Favorite
+        function openCustomModal() {
+            document.getElementById('customName').value = '';
+            document.getElementById('customUrl').value = '';
+            document.getElementById('customModal').classList.remove('hidden');
+        }
+        function closeCustomModal() {
+            document.getElementById('customModal').classList.add('hidden');
+        }
+        function saveCustomStation() {
+            const station = validateCustomStation({
+                stationuuid: 'custom_' + (globalThis.crypto?.randomUUID?.() || Date.now() + '_' + Math.random().toString(36).slice(2)),
+                name: document.getElementById('customName').value.trim(),
+                url_resolved: document.getElementById('customUrl').value.trim()
+            });
+            if (!station) { showToast('Введите название и корректный адрес потока http:// или https://'); return; }
+            const nextCustom = [...customStations, station];
+            const nextFavorites = [...favorites, station.stationuuid];
+            try {
+                localStorage.setItem('auraradio_custom', JSON.stringify(nextCustom));
+                localStorage.setItem('auraradio_favorites', JSON.stringify(nextFavorites));
+            } catch { showToast('Не удалось сохранить станцию в браузере'); return; }
+            customStations = nextCustom;
+            favorites = nextFavorites;
+            cacheStation(station);
+            updateFavCountBadge();
+            closeCustomModal();
+            switchTab('favorites');
+            showToast('Станция добавлена в избранное');
+        }
         function toggleFavorite(uuid, event) {
             if (event) event.stopPropagation();
 
@@ -1856,8 +1890,8 @@
                 });
 
                 if (!mediaSessionHandlersSet) {
-                    navigator.mediaSession.setActionHandler('play', () => togglePlayPause());
-                    navigator.mediaSession.setActionHandler('pause', () => togglePlayPause());
+                    navigator.mediaSession.setActionHandler('play', () => { if (!isPlaying && currentStation) playStreamUrl(currentStation.url_resolved); });
+                    navigator.mediaSession.setActionHandler('pause', () => { if (isPlaying) stopRadio(); });
                     navigator.mediaSession.setActionHandler('previoustrack', () => playPrevStation());
                     navigator.mediaSession.setActionHandler('nexttrack', () => playNextStation());
                     navigator.mediaSession.setActionHandler('stop', () => stopRadio());
@@ -1975,7 +2009,8 @@
         function triggerShutdownNow() {
             const confirmed = confirm(
                 'Вы уверены, что хотите выключить компьютер?\n\n' +
-                'После подтверждения запустится таймер на 30 секунд. ' +
+                'Если установлен помощник Windows, откроется ещё одно окно подтверждения. После нажатия ОК выключение запланируется через 30 секунд. ' +
+                'Windows может принудительно закрыть приложения — сохраните работу перед подтверждением.\n\n' +
                 'Вы сможете отменить выключение через:\n  shutdown /a'
             );
             if (!confirmed) return;

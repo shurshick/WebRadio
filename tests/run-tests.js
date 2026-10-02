@@ -24,7 +24,7 @@ function runtime(storageData = {}, fetchImpl = async () => ({ ok: true, json: as
             addEventListener: (type, fn) => { listeners[id + ':' + type] = fn; },
             appendChild() {}, append() {}, replaceChildren() {}, remove() {}, click() {},
             setAttribute(key, value) { this[key] = value; }, removeAttribute(key) { delete this[key]; },
-            getAttribute() { return null; }, play: async () => {}, pause() {}, load() {} };
+            getAttribute(key) { return this[key] ?? null; }, play: async () => {}, pause() {}, load() {} };
         nodes.set(id, node); return node;
     }
     const document = { documentElement: { dataset: { theme: 'dark' } }, getElementById: element, createElement: () => element('created' + Math.random()),
@@ -43,6 +43,60 @@ function runtime(storageData = {}, fetchImpl = async () => ({ ok: true, json: as
 }
 
 async function main() {
+    await test('playback indicator follows playing, waiting, pause, ended and emptied', () => {
+        const rt = runtime(); rt.boot();
+        const eq = rt.nodes.get('equalizer');
+        for (const event of ['playing', 'waiting', 'playing', 'pause', 'playing', 'ended', 'playing', 'emptied']) {
+            rt.listeners['audioElement:' + event]();
+            assert.equal(eq.classList.contains('paused-eq'), event !== 'playing');
+            assert.equal(vm.runInContext('isPlaying', rt.context), event === 'playing' || event === 'waiting');
+        }
+    });
+    await test('new stream and rejected playback stop decorative animation', async () => {
+        const rt = runtime(); rt.boot();
+        rt.listeners['audioElement:playing']();
+        rt.nodes.get('audioElement').play = () => Promise.reject(new Error('unsupported stream'));
+        rt.context.playStreamUrl('https://example.com/bad');
+        assert(rt.nodes.get('equalizer').classList.contains('paused-eq'));
+        await new Promise(resolve => setTimeout(resolve, 0));
+        assert.equal(vm.runInContext('isPlaying', rt.context), false);
+        assert.equal(rt.nodes.get('playerStatusText').textContent, 'Ошибка воспроизведения потока');
+    });
+    await test('custom station form saves playable favorite and rejects invalid URL', async () => {
+        const rt = runtime();
+        rt.context.openCustomModal();
+        rt.nodes.get('customName').value = 'My Radio';
+        rt.nodes.get('customUrl').value = 'javascript:alert(1)';
+        rt.context.saveCustomStation();
+        assert(!rt.store.has('auraradio_custom'));
+        rt.nodes.get('customUrl').value = 'https://example.com/live';
+        rt.context.saveCustomStation();
+        await new Promise(resolve => setTimeout(resolve, 0));
+        const station = JSON.parse(rt.store.get('auraradio_custom'))[0];
+        assert.equal(station.codec, ''); assert.equal(station.bitrate, 0);
+        assert.equal(station.votes, null);
+        assert(JSON.parse(rt.store.get('auraradio_favorites')).includes(station.stationuuid));
+        assert(rt.nodes.get('customModal').classList.contains('hidden'));
+        rt.context.playStation(station.stationuuid);
+        assert.equal(rt.nodes.get('audioElement').src, station.url_resolved);
+        assert.equal(rt.nodes.get('playerCodec').textContent, '—');
+        assert(!rt.requests.some(url => url.includes('/url/custom_')));
+    });
+    await test('UI handlers are defined and Media Session actions do not toggle the opposite state', () => {
+        const rt = runtime();
+        for (const handler of html.matchAll(/on(?:click|change|input)="(\w+)\(/g)) assert.equal(typeof rt.context[handler[1]], 'function', handler[1]);
+        const handlers = {};
+        rt.context.navigator.mediaSession = { setActionHandler(action, fn) { handlers[action] = fn; } };
+        rt.context.MediaMetadata = class { constructor(data) { Object.assign(this, data); } };
+        vm.runInContext("currentStation = { stationuuid: 'test', name: 'Test', url_resolved: 'https://example.com/live' }", rt.context);
+        rt.context.updateMediaSession(vm.runInContext('currentStation', rt.context));
+        handlers.play(); handlers.play();
+        assert.equal(rt.nodes.get('audioElement').src, 'https://example.com/live');
+        assert.equal(vm.runInContext('isPlaying', rt.context), true);
+        handlers.pause(); handlers.pause();
+        assert.equal(vm.runInContext('isPlaying', rt.context), false);
+        assert.equal(rt.nodes.get('audioElement').src, undefined);
+    });
     const sampleStations = () => Array.from({ length: 1001 }, (_, i) => ({ stationuuid: `saved-${i}`, name: `Saved Radio ${i}`, url_resolved: `https://example.com/${i}`, votes: i, clickcount: i }));
     const snapshot = (savedAt = Date.now()) => ({ version: 1, savedAt, updatedAt: '2026-10-01T00:00:00Z', rankingsUpdatedAt: '2026-10-01T00:00:00Z', stations: sampleStations() });
     await test('favorite backup v2 transfers playable metadata and accepts v1 and legacy', async () => {
@@ -285,8 +339,13 @@ async function main() {
         }
         rt.context.Hls = HlsMock;
         rt.context.playStreamUrl('https://example.com/live.m3u8');
-        for (let i = 0; i < 3; i++) instance.handlers.error(null, { fatal: true, type: 'NETWORK_ERROR' });
+        for (let i = 0; i < 3; i++) {
+            rt.context.setPlaybackState('playing');
+            instance.handlers.error(null, { fatal: true, type: 'NETWORK_ERROR' });
+            assert(rt.nodes.get('equalizer').classList.contains('paused-eq'));
+        }
         assert.equal(instance.network, 2); assert(instance.destroyed);
+        assert.equal(vm.runInContext('isPlaying', rt.context), false);
     });
     await test('runtime bootstrap restores custom station without API lookup', () => {
         const station = { stationuuid: 'custom_1', name: 'Mine', url_resolved: 'https://example.com' };

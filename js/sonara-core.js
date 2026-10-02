@@ -25,13 +25,14 @@
         if (!stationuuid || !stationuuid.startsWith('custom_')) return null;
         if (typeof s.name !== 'string' || !s.name.trim() || s.name.trim().length > 256) return null;
         if (typeof s.url_resolved !== 'string' || !s.url_resolved.trim() || s.url_resolved.trim().length > 2048) return null;
+        try { if (!['http:', 'https:'].includes(new URL(s.url_resolved.trim()).protocol)) return null; } catch { return null; }
         const optional = (key, max, fallback = '') => typeof s[key] === 'string' ? s[key].trim().slice(0, max) : fallback;
         return {
             stationuuid, name: s.name.trim(), url_resolved: s.url_resolved.trim(),
             favicon: optional('favicon', 2048), country: optional('country', 128, 'Local'),
-            state: optional('state', 128), codec: optional('codec', 32, 'MP3').toUpperCase(),
-            bitrate: safeNumber(s.bitrate, 128) || 128, tags: optional('tags', 512, 'custom'),
-            votes: 0, clickcount: 0
+            state: optional('state', 128), codec: optional('codec', 32).toUpperCase(),
+            bitrate: safeNumber(s.bitrate), tags: optional('tags', 512, 'custom'),
+            votes: null, clickcount: null
         };
     }
 
