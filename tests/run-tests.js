@@ -62,6 +62,18 @@ function runtime(storageData = {}, fetchImpl = async () => ({ ok: true, json: as
 }
 
 async function main() {
+    await test('station controls wrap the current list and start when the selected station is absent', () => {
+        const rt = runtime();
+        vm.runInContext("stations = [{stationuuid:'a',name:'A',url_resolved:'https://example.com/a'}, {stationuuid:'b',name:'B',url_resolved:'https://example.com/b'}]", rt.context);
+        rt.context.playNextStation(); assert.equal(vm.runInContext('currentStation.stationuuid', rt.context), 'a');
+        rt.context.playPrevStation(); assert.equal(vm.runInContext('currentStation.stationuuid', rt.context), 'b');
+        rt.context.playNextStation(); assert.equal(vm.runInContext('currentStation.stationuuid', rt.context), 'a');
+        vm.runInContext("currentStation = {stationuuid:'outside'}", rt.context);
+        rt.context.playPrevStation(); assert.equal(vm.runInContext('currentStation.stationuuid', rt.context), 'b');
+        vm.runInContext('stations = []', rt.context);
+        rt.context.playNextStation(); assert.equal(vm.runInContext('currentStation.stationuuid', rt.context), 'b');
+        rt.context.stopRadio();
+    });
     await test('stream backups validate, deduplicate and transfer in backup v3 with v2 import', () => {
         const station = { stationuuid: 'custom_one', name: 'Mine', url_resolved: 'https://example.com/main', alternate_urls: ['https://example.com/main', 'javascript:bad', 'https://example.com/backup'] };
         const payload = Core.createBackup(['custom_one', 'catalog_one'], [station], [{ ...station, stationuuid: 'catalog_one' }], [{ stationuuid: 'catalog_one', urls: ['https://example.com/override', 'https://example.com/backup'] }]);

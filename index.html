@@ -2,7 +2,7 @@
 <html lang="ru" data-theme="dark">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Sonara Radio — Онлайн Радио Каталог</title>
     
     <!-- Tailwind CSS CDN -->
@@ -125,26 +125,112 @@
         html[data-theme="light"] input::placeholder { color: #64748b; }
         html[data-theme="light"] select option { background: #fff; color: #18243a; }
 
-        @media (max-width: 639px) {
-            header { flex-wrap: wrap; gap: 12px; }
-            header > div:first-child { min-width: 0; }
+        :root { --player-height: 128px; }
+        #appContent { padding-bottom: calc(var(--player-height) + 24px); }
+        .mobile-control-label, .stream-copy-label, .mobile-filter-container { display: none; }
+        @media (min-width: 1280px) { .stream-copy-label { display: inline; } }
+        #mobileNavigation, #mobileMoreBtn, #mobileMenuClose, #mobileMenuBackdrop, .mobile-extra-action { display: none; }
+        button { touch-action: manipulation; }
+        i.fa-heart::before { content: "♡" !important; font: 24px/1 sans-serif; }
+        i.fa-solid.fa-heart::before { content: "♥" !important; }
+        button:focus-visible, a:focus-visible { outline: 2px solid #00b8d4; outline-offset: 3px; }
+        .transport-icon::before { content: none !important; }
+        .transport-icon svg, .station-step svg { width: 22px; height: 22px; display: block; }
+        #toast { bottom: calc(var(--player-height) + 12px); max-width: calc(100% - 24px); width: max-content; }
+        [id$="Modal"] { padding: 16px; }
+        [id$="Modal"] > div { max-height: calc(100dvh - 32px); overflow-y: auto; }
+        @media (max-width: 1023px) {
+            #appSidebar { display: none; }
+            .mobile-filter-container { display: block; }
+            #catalogToolbar > div { width: 100%; flex-wrap: wrap; gap: 8px; }
+            #catalogToolbar > div > * + * { margin-left: 0; }
+            #catalogToolbar select { max-width: 100%; }
+            #appSidebar.mobile-open {
+                display: flex; position: fixed; inset: 0 0 var(--player-height) 0;
+                width: 100%; z-index: 45; overflow-y: auto; overscroll-behavior: contain;
+                background: #0d0f15; padding-top: max(16px, env(safe-area-inset-top));
+            }
+            html[data-theme="light"] #appSidebar.mobile-open { background: #f8fafc; }
+            #mobileMenuBackdrop.mobile-open { display: block; position: fixed; inset: 0; z-index: 44; background: #0009; }
+            #mobileMenuClose { display: block; align-self: flex-end; min-height: 44px; padding: 0 16px; border-radius: 12px; }
+            #mobileNavigation { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; margin-top: 8px; border-top: 1px solid #64748b40; padding-top: 4px; }
+            #mobileNavigation button { min-height: 44px; font-size: 12px; color: #94a3b8; border-radius: 10px; }
+            #mobileNavigation button[aria-current="page"], #mobileMenuBtn[aria-expanded="true"] { background: #00f2fe15; color: #00b8d4; }
+            html[data-theme="light"] #mobileNavigation button { color: #52647d; }
+            html[data-theme="light"] #mobileNavigation button[aria-current="page"] { color: #087e9a; }
+            #radioPlayer { padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+            #appSidebar button, #appSidebar select { min-height: 44px; }
+            #footerLogo { max-width: 140px; }
+            header button, main button, [id$="Modal"] button { min-width: 44px; min-height: 44px; }
+            header .mobile-control-label { display: inline; font-size: 12px; }
+            header button:has(.mobile-control-label) > i { display: none; }
+            #radioPlayer { padding-left: max(12px, env(safe-area-inset-left)); padding-right: max(12px, env(safe-area-inset-right)); padding-top: 8px; }
+            #playerLayout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
+            #playerInfo { width: 100%; }
+            #playerFavicon { width: 36px; height: 36px; }
+            #playerStationMeta, #playerFormats { display: none; }
+            #playerPlayback { max-width: none; width: 100%; }
+            #playerPlayback > * + * { margin-top: 4px; }
+            #playerTransport { display: flex; width: 100%; justify-content: space-between; gap: 6px; }
+            #playerTransport > * + * { margin-left: 0; }
+            #playerTransport button { display: flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; flex-shrink: 0; border-radius: 12px; }
+            #playerTransport .station-step { width: 48px; height: 48px; background: #64748b18; }
+            #playerTransport #playPauseBtn { width: 56px; height: 56px; border-radius: 50%; }
+            #playerTransport .desktop-player-action { display: none; }
+            #playerTransport #mobileMoreBtn { display: flex; font-size: 12px; }
+            #playerStatus { width: 100%; justify-content: center; min-height: 20px; }
+            #equalizer { flex-shrink: 0; }
+            #playerExtras { display: none; width: 100%; justify-content: center; gap: 8px; flex-wrap: wrap; }
+            #playerExtras.mobile-open { display: flex; }
+            #playerExtras .mobile-extra-action { display: flex; align-items: center; }
+            #playerExtras .mobile-control-label, #playerExtras .stream-copy-label { display: inline; }
+            #playerExtras > * + * { margin-left: 0; }
+            #playerExtras button, #playbackFailureActions button { min-width: 44px; min-height: 44px; }
+            #volumeSlider { height: 44px; width: 90px; }
+            #playbackFailureActions { gap: 6px; }
+            .station-card button { min-width: 44px; min-height: 44px; }
+            .station-card .opacity-0 { opacity: 1; }
+            .station-card > div:last-child { flex-wrap: wrap; gap: 8px; }
+            .station-card > div:last-child > div:last-child { margin-left: auto; }
+            #sleepMenu label { min-height: 44px; }
+            #sleepMenu { max-height: min(360px, calc(100dvh - var(--player-height) - 16px)); overflow-y: auto; }
+        }
+        @media (min-width: 640px) and (max-width: 1023px) {
+            #stationsGrid, #loadingState, #stationsGrid .col-span-full > .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        }
+        @media (max-width: 767px) {
+            header { flex-wrap: wrap; gap: 8px; padding: max(8px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left)); }
+            header > div:first-child { min-width: 0; gap: 8px; }
             header > div:first-child h1 { font-size: 15px; }
             header > div:first-child p { display: none; }
-            header > div:nth-child(2) {
-                order: 3;
-                flex: 0 0 100%;
-                max-width: none;
-                margin: 0;
-            }
+            header > div:nth-child(2) { order: 3; flex: 0 0 100%; max-width: none; margin: 0; }
             header > div:last-child { margin-left: auto; gap: 4px; }
-            header > div:last-child #navFavBtn { padding: 6px; gap: 4px; }
-            header > div:last-child > button:not(#navFavBtn) { width: 36px; height: 36px; flex-shrink: 0; }
+            header > div:last-child > * + * { margin-left: 0; }
+            #navFavBtn { display: none; }
+            header button { min-width: 44px; min-height: 44px; }
+            #headerLogo { width: 36px; height: 36px; }
+            header .mobile-control-label { display: inline; font-size: 12px; }
+            header button:has(.mobile-control-label) > i { display: none; }
+            #searchInput { font-size: 16px; min-height: 44px; }
+            #clearSearch { width: 44px; justify-content: center; padding: 0; }
             aside, main { min-width: 0; max-width: 100%; }
-            .glass-player > div > div:last-child {
-                flex-wrap: wrap;
-                justify-content: center;
-                row-gap: 8px;
-            }
+            main { padding: 16px max(12px, env(safe-area-inset-right)) 16px max(12px, env(safe-area-inset-left)); }
+            #sectionTitle { font-size: 20px; overflow-wrap: anywhere; }
+            #sortControls { width: 100%; flex-wrap: wrap; gap: 8px; }
+            #sortSelect { width: 100%; margin-left: 0; min-width: 0; max-width: 100%; }
+            main select { max-width: 100%; }
+            main select, main button, input:not([type="checkbox"]), textarea { min-height: 44px; }
+            select, input:not([type="range"]), textarea { font-size: 16px !important; }
+            [id$="Modal"] > div { margin: 0; padding: 20px; }
+            [id$="Modal"] button { min-height: 44px; min-width: 44px; }
+        }
+        @media (max-width: 1023px) and (max-height: 500px) {
+            header { position: relative; }
+            #playerInfo { min-height: 20px; justify-content: center; }
+            #playerInfo > div:first-child { display: none; }
+            #playerInfo > div:last-child { flex: 0 1 auto; margin-left: 0; }
+            #playerStationName { text-align: center; }
+            #playerLayout { gap: 0; }
         }
     </style>
     <script>
@@ -193,19 +279,21 @@
                 <span id="favCountBadge" class="ml-1 px-1.5 py-0.2 bg-pink-500/20 text-pink-400 text-xs rounded-full font-bold">0</span>
             </button>
             <button id="themeToggle" onclick="toggleTheme()" class="w-10 h-10 rounded-xl bg-dark-700 hover:bg-dark-600 border border-gray-700/50 flex items-center justify-center text-gray-300 hover:text-white transition-all" type="button" aria-label="Включить светлую тему" aria-pressed="false" title="Включить светлую тему">
-                <i id="themeToggleIcon" class="fa-solid fa-sun" aria-hidden="true"></i>
+                <i id="themeToggleIcon" class="fa-solid fa-sun" aria-hidden="true"></i><span class="mobile-control-label">Тема</span>
             </button>
             <button onclick="toggleThemeModal()" class="w-10 h-10 rounded-xl bg-dark-700 hover:bg-dark-600 border border-gray-700/50 flex items-center justify-center text-gray-300 hover:text-white transition-all" title="Информация">
-                <i class="fa-solid fa-circle-info"></i>
+                <i class="fa-solid fa-circle-info"></i><span class="mobile-control-label">Инфо</span>
             </button>
         </div>
     </header>
 
     <!-- Main Container -->
-    <div class="flex-1 flex flex-col lg:flex-row pb-32">
+    <div id="appContent" class="flex-1 flex flex-col lg:flex-row pb-32">
+        <div id="mobileMenuBackdrop" onclick="setMobileMenu(false)" aria-hidden="true"></div>
         
         <!-- Sidebar Categories / Genres -->
-        <aside class="w-full lg:w-64 glass-panel border-r border-gray-800/60 p-4 lg:min-h-[calc(100vh-73px-96px)] flex flex-col space-y-6">
+        <aside id="appSidebar" aria-label="Меню и фильтры" class="w-full lg:w-64 glass-panel border-r border-gray-800/60 p-4 lg:min-h-[calc(100vh-73px-96px)] flex flex-col space-y-6">
+            <button id="mobileMenuClose" onclick="setMobileMenu(false)" type="button" class="bg-dark-700 text-gray-200">Закрыть меню</button>
             <div>
                 <h3 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3 px-2">Меню</h3>
                 <nav class="space-y-1">
@@ -241,6 +329,10 @@
                 </nav>
             </div>
 
+            <div id="mobileFilters" class="mobile-filter-container">
+                <h3 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3 px-2">Фильтры и сортировка</h3>
+                <div id="mobileFilterSlot"></div>
+            </div>
             <div>
                 <h3 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3 px-2">Жанры и теги</h3>
                 <div id="genresList" class="flex flex-wrap gap-1.5 px-1">
@@ -286,6 +378,7 @@
             </div>
 
             <!-- Filter & Sort Toolbar -->
+            <div id="catalogToolbarAnchor"></div>
             <div id="catalogToolbar" class="flex flex-wrap items-center justify-between gap-3 mb-6 bg-dark-800/60 p-3 rounded-xl border border-gray-800/80">
                 <div class="flex items-center space-x-2 text-xs">
                     <span class="text-gray-400"><i class="fa-solid fa-filter mr-1"></i> Страна:</span>
@@ -311,7 +404,7 @@
                     </select>
     
                 </div>
-                <div class="flex items-center space-x-2 text-xs">
+                <div id="sortControls" class="flex items-center space-x-2 text-xs">
                     <span class="text-gray-400"><i class="fa-solid fa-arrow-down-wide-short mr-1"></i> Сортировка:</span>
                     <select id="sortSelect" onchange="sortStations(this.value)" class="bg-dark-700 text-gray-200 border border-gray-700 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-neon-cyan">
                         <option value="clicks">По кликам Radio Browser</option>
@@ -359,11 +452,11 @@
     </div>
 
     <!-- Sticky Bottom Player Bar -->
-    <div class="glass-player fixed bottom-0 left-0 right-0 z-50 px-4 lg:px-8 py-3.5 shadow-2xl">
-        <div class="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
+    <div id="radioPlayer" class="glass-player fixed bottom-0 left-0 right-0 z-50 px-4 lg:px-8 py-3.5 shadow-2xl">
+        <div id="playerLayout" class="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
             
             <!-- Station Info & Status -->
-            <div class="flex items-center space-x-3.5 w-full md:w-1/4 min-w-0">
+            <div id="playerInfo" class="flex items-center space-x-3.5 w-full md:w-1/4 min-w-0">
                 <div class="relative flex-shrink-0">
                     <img id="playerFavicon" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%232a334a'%3E%3Cpath d='M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z'/%3E%3C/svg%3E" 
                          alt="Favicon" class="w-14 h-14 rounded-xl object-cover bg-dark-700 border border-gray-700/50 shadow-md" onerror="if(this.dataset.failed!=='1'){this.dataset.failed='1'; this.src=getFallbackSVG(currentStation ? currentStation.name : 'R')}">
@@ -374,7 +467,7 @@
                         <h4 id="playerStationName" class="font-semibold text-sm text-white truncate">Выберите радиостанцию</h4>
                     </div>
                     <p id="playerStationMeta" class="text-xs text-gray-400 truncate mt-0.5">Каталог готов к работе</p>
-                    <div class="flex items-center space-x-2 mt-1">
+                    <div id="playerFormats" class="flex items-center space-x-2 mt-1">
                         <span id="playerCodec" class="px-1.5 py-0.5 bg-dark-700 text-gray-400 text-[10px] rounded uppercase font-mono">--</span>
                         <span id="playerBitrate" class="px-1.5 py-0.5 bg-dark-700 text-gray-400 text-[10px] rounded uppercase font-mono">-- kbps</span>
                     </div>
@@ -382,35 +475,36 @@
             </div>
 
             <!-- Playback Controls & Equalizer -->
-            <div class="flex flex-col items-center space-y-2 w-full md:w-auto flex-1 max-w-md">
-                <div class="flex items-center space-x-3 sm:space-x-5">
+            <div id="playerPlayback" class="flex flex-col items-center space-y-2 w-full md:w-auto flex-1 max-w-md">
+                <div id="playerTransport" class="flex items-center space-x-3 sm:space-x-5">
                     <!-- Favorite toggle in player -->
-                    <button id="playerFavBtn" onclick="toggleCurrentFavorite()" class="text-gray-400 hover:text-pink-500 transition-colors text-lg p-1" title="В избранное">
+                    <button id="playerFavBtn" aria-label="В избранное" aria-pressed="false" onclick="toggleCurrentFavorite()" class="text-gray-400 hover:text-pink-500 transition-colors text-lg p-1" title="В избранное">
                         <i class="fa-regular fa-heart"></i>
                     </button>
                     <!-- Previous Station Button -->
-                    <button onclick="playPrevStation()" class="text-gray-400 hover:text-white transition-colors text-base p-1.5 rounded-lg hover:bg-dark-700" title="Предыдущая станция (Стрелка влево)">
-                        <i class="fa-solid fa-backward-step"></i>
+                    <button id="previousStationBtn" aria-label="Предыдущая станция" onclick="playPrevStation()" class="station-step text-gray-400 hover:text-white transition-colors text-base p-1.5 rounded-lg hover:bg-dark-700" title="Предыдущая станция (Стрелка влево)">
+                        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 5h3v14H6zM18 5v14l-9-7z"/></svg>
                     </button>
                     <!-- Main Play/Pause Button -->
-                    <button id="playPauseBtn" onclick="togglePlayPause()" class="w-12 h-12 rounded-full bg-gradient-to-tr from-neon-cyan to-neon-blue flex items-center justify-center text-dark-900 text-lg shadow-lg shadow-cyan-500/30 hover:scale-105 active:scale-95 transition-all" title="Воспроизведение / Пауза (Пробел)">
-                        <i id="playPauseIcon" class="fa-solid fa-play ml-0.5"></i>
+                    <button id="playPauseBtn" aria-label="Начать воспроизведение" onclick="togglePlayPause()" class="w-12 h-12 rounded-full bg-gradient-to-tr from-neon-cyan to-neon-blue flex items-center justify-center text-dark-900 text-lg shadow-lg shadow-cyan-500/30 hover:scale-105 active:scale-95 transition-all" title="Воспроизведение / Пауза (Пробел)">
+                        <i id="playPauseIcon" class="transport-icon fa-solid fa-play ml-0.5"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4v16l14-8z"/></svg></i>
                     </button>
                     <!-- Next Station Button -->
-                    <button onclick="playNextStation()" class="text-gray-400 hover:text-white transition-colors text-base p-1.5 rounded-lg hover:bg-dark-700" title="Следующая станция (Стрелка вправо)">
-                        <i class="fa-solid fa-forward-step"></i>
+                    <button id="nextStationBtn" aria-label="Следующая станция" onclick="playNextStation()" class="station-step text-gray-400 hover:text-white transition-colors text-base p-1.5 rounded-lg hover:bg-dark-700" title="Следующая станция (Стрелка вправо)">
+                        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M15 5h3v14h-3zM6 5v14l9-7z"/></svg>
                     </button>
                     <!-- Stop Button -->
-                    <button onclick="openStreamUrlsModal()" class="text-gray-400 hover:text-white transition-colors text-base p-1" title="Адреса потоков станции">
+                    <button onclick="openStreamUrlsModal()" class="desktop-player-action text-gray-400 hover:text-white transition-colors text-base p-1" title="Адреса потоков станции">
                         <i class="fa-solid fa-list"></i>
                     </button>
-                    <button onclick="stopRadio()" class="text-gray-400 hover:text-white transition-colors text-base p-1" title="Остановить">
+                    <button onclick="stopRadio()" class="desktop-player-action text-gray-400 hover:text-white transition-colors text-base p-1" title="Остановить">
                         <i class="fa-solid fa-stop"></i>
                     </button>
+                    <button id="mobileMoreBtn" onclick="toggleMobileExtras()" type="button" aria-expanded="false" aria-controls="playerExtras" class="text-gray-400">Ещё</button>
                 </div>
 
                 <!-- Equalizer Animation & Status Text -->
-                <div class="flex items-center space-x-3" style="max-width:100%">
+                <div id="playerStatus" class="flex items-center space-x-3" style="max-width:100%">
                     <div id="equalizer" class="flex items-end space-x-1 h-5 paused-eq" role="img" aria-label="Воспроизведение не начато" title="Индикатор состояния плеера; не анализирует звук">
                         <div class="equalizer-bar rounded-t"></div>
                         <div class="equalizer-bar rounded-t"></div>
@@ -428,11 +522,12 @@
             </div>
 
             <!-- Volume & Extra Controls -->
-            <div class="flex items-center justify-end space-x-3 w-full md:w-1/4">
+            <div id="playerExtras" class="flex items-center justify-end space-x-3 w-full md:w-1/4">
+                <button onclick="openStreamUrlsModal()" class="mobile-extra-action bg-dark-700 rounded-xl text-gray-300" style="padding:0 12px" title="Адреса потоков станции">Адреса</button>
                 <!-- Sleep Timer -->
                 <div class="relative">
                     <button id="sleepTimerBtn" onclick="toggleSleepMenu()" class="px-2.5 py-1.5 bg-dark-700 hover:bg-dark-600 text-gray-300 hover:text-neon-cyan rounded-xl text-xs font-medium transition-all border border-gray-700/50 flex items-center space-x-1.5" title="Таймер сна">
-                        <i class="fa-solid fa-moon"></i>
+                        <i class="fa-solid fa-moon"></i><span class="mobile-control-label">Сон</span>
                         <span id="sleepTimerBadge" class="hidden text-neon-cyan text-[11px] font-mono font-bold"></span>
                     </button>
                     <div id="sleepMenu" class="absolute bottom-full right-0 mb-2 w-48 bg-dark-800/95 backdrop-blur-xl border border-gray-700/80 rounded-xl shadow-2xl p-2 hidden z-50 text-xs">
@@ -461,11 +556,11 @@
                 <!-- Copy Stream URL -->
                 <button onclick="copyCurrentStreamUrl()" class="px-2.5 py-1.5 bg-dark-700 hover:bg-dark-600 text-gray-300 hover:text-neon-cyan rounded-xl text-xs font-medium transition-all border border-gray-700/50 flex items-center space-x-1.5" title="Копировать прямую ссылку на поток текущей станции">
                     <i class="fa-solid fa-link"></i>
-                    <span class="hidden xl:inline">Поток</span>
+                    <span class="stream-copy-label">Поток</span>
                 </button>
                 <div class="flex items-center space-x-2">
                     <button onclick="toggleMute()" id="muteBtn" class="text-gray-400 hover:text-white transition-colors text-sm" title="Без звука (Клавиша M)">
-                        <i id="muteIcon" class="fa-solid fa-volume-high"></i>
+                        <i id="muteIcon" class="fa-solid fa-volume-high"></i><span class="mobile-control-label">Звук</span>
                     </button>
                     <input type="range" id="volumeSlider" min="0" max="1" step="0.01" value="0.8" 
                         class="w-20 sm:w-24 lg:w-28 h-1.5 bg-dark-700 rounded-lg appearance-none cursor-pointer accent-neon-cyan" title="Громкость (Стрелки вверх/вниз)">
@@ -474,6 +569,12 @@
             </div>
 
         </div>
+        <nav id="mobileNavigation" aria-label="Быстрая навигация">
+            <button id="mobileExploreBtn" onclick="switchTab('explore')" type="button" aria-current="page">Каталог</button>
+            <button id="mobileFavoritesBtn" onclick="switchTab('favorites')" type="button">Избранное</button>
+            <button onclick="focusMobileSearch()" type="button">Поиск</button>
+            <button id="mobileMenuBtn" onclick="setMobileMenu()" type="button" aria-expanded="false" aria-controls="appSidebar">Меню</button>
+        </nav>
     </div>
 
     <!-- Hidden HTML5 Audio Element -->
@@ -551,7 +652,7 @@
                 </div>
                 <div>
                     <h3 class="font-bold text-lg text-white">О приложении</h3>
-                    <p class="text-xs text-gray-400">Sonara Radio v2.5.0</p>
+                    <p class="text-xs text-gray-400">Sonara Radio v2.6.0</p>
                 </div>
             </div>
             <p class="text-sm text-gray-300 leading-relaxed mb-4">
@@ -1041,6 +1142,7 @@
 
         // Initialize App
         window.addEventListener('DOMContentLoaded', () => {
+            if (typeof window.matchMedia === 'function') initializeResponsiveControls();
             applyTheme(document.documentElement.dataset.theme);
             updateFavCountBadge();
             loadStations('explore');
@@ -1148,12 +1250,88 @@
             
         });
 
+        // Responsive controls keep the catalog clear of the changing player height.
+        function syncPlayerHeight() {
+            const height = document.getElementById('radioPlayer').getBoundingClientRect().height;
+            document.documentElement.style.setProperty('--player-height', Math.ceil(height) + 'px');
+        }
+        function setMobileMenu(open) {
+            const sidebar = document.getElementById('appSidebar');
+            const expanded = open === undefined ? !sidebar.classList.contains('mobile-open') : open;
+            if (expanded) {
+                document.getElementById('playerExtras').classList.remove('mobile-open');
+                document.getElementById('mobileMoreBtn').setAttribute('aria-expanded', 'false');
+                document.getElementById('sleepMenu').classList.add('hidden');
+            }
+            sidebar.classList[expanded ? 'add' : 'remove']('mobile-open');
+            document.getElementById('mobileMenuBackdrop').classList[expanded ? 'add' : 'remove']('mobile-open');
+            document.getElementById('mobileMenuBtn').setAttribute('aria-expanded', String(expanded));
+            document.querySelector('main').inert = expanded;
+            document.querySelector('header').inert = expanded;
+            document.body.style.overflow = expanded ? 'hidden' : '';
+            if (expanded) { sidebar.setAttribute('role', 'dialog'); sidebar.setAttribute('aria-modal', 'true'); }
+            else { sidebar.removeAttribute('role'); sidebar.removeAttribute('aria-modal'); }
+            document.getElementById(expanded ? 'mobileMenuClose' : 'mobileMenuBtn').focus();
+        }
+        function toggleMobileExtras() {
+            const extras = document.getElementById('playerExtras');
+            const expanded = !extras.classList.contains('mobile-open');
+            extras.classList[expanded ? 'add' : 'remove']('mobile-open');
+            document.getElementById('mobileMoreBtn').setAttribute('aria-expanded', String(expanded));
+            if (!expanded) document.getElementById('sleepMenu').classList.add('hidden');
+        }
+        function focusMobileSearch() {
+            setMobileMenu(false);
+            window.scrollTo({ top: 0, behavior: 'instant' });
+            searchInput.focus();
+        }
+        function placeResponsiveFilters() {
+            const toolbar = document.getElementById('catalogToolbar');
+            const slot = document.getElementById('mobileFilterSlot');
+            if (window.innerWidth < 1024) { if (toolbar.parentElement !== slot) slot.appendChild(toolbar); }
+            else document.getElementById('catalogToolbarAnchor').after(toolbar);
+        }
+        function initializeResponsiveControls() {
+            placeResponsiveFilters();
+            syncPlayerHeight();
+            if (typeof ResizeObserver !== 'undefined') new ResizeObserver(syncPlayerHeight).observe(document.getElementById('radioPlayer'));
+            window.addEventListener('resize', () => {
+                placeResponsiveFilters();
+                if (window.innerWidth >= 1024 && document.getElementById('appSidebar').classList.contains('mobile-open')) setMobileMenu(false);
+                syncPlayerHeight();
+            });
+            document.addEventListener('click', e => {
+                if (document.getElementById('appSidebar').classList.contains('mobile-open') && e.target.closest('#appSidebar button:not(#mobileMenuClose)')) setMobileMenu(false);
+            });
+            document.addEventListener('change', e => {
+                if (document.getElementById('appSidebar').classList.contains('mobile-open') && e.target.closest('#catalogToolbar')) setMobileMenu(false);
+            });
+            document.addEventListener('keydown', e => {
+                const sidebar = document.getElementById('appSidebar');
+                if (e.key === 'Tab' && sidebar.classList.contains('mobile-open')) {
+                    const controls = [...sidebar.querySelectorAll('button, a, input, select')].filter(node => !node.disabled && node.getClientRects().length);
+                    const first = controls[0], last = controls[controls.length - 1];
+                    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+                    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+                }
+                if (e.key === 'Escape') {
+                    if (document.getElementById('appSidebar').classList.contains('mobile-open')) setMobileMenu(false);
+                    if (document.getElementById('playerExtras').classList.contains('mobile-open')) { toggleMobileExtras(); document.getElementById('mobileMoreBtn').focus(); }
+                }
+            });
+        }
+
         // Switch Tabs
         function switchTab(tab) {
             clearTimeout(searchTimeout);
             searchTimeout = null;
             ++activeRequestId;
             currentTab = tab;
+            if (document.getElementById('appSidebar').classList.contains('mobile-open')) setMobileMenu(false);
+            for (const [id, view] of [['mobileExploreBtn', 'explore'], ['mobileFavoritesBtn', 'favorites']]) {
+                const button = document.getElementById(id);
+                if (tab === view) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current');
+            }
             currentTag = '';
             searchInput.value = '';
             clearSearchBtn.classList.add('hidden');
@@ -1802,6 +1980,8 @@
             const nb = safeNumber(station.bitrate, 0); playerBitrate.textContent = nb > 0 ? nb + ' kbps' : '-- kbps';
 
             const isFav = favorites.includes(station.stationuuid);
+            playerFavBtn.setAttribute('aria-pressed', String(isFav));
+            playerFavBtn.setAttribute('aria-label', isFav ? 'Убрать из избранного' : 'В избранное');
             playerFavBtn.innerHTML = `<i class="${isFav ? 'fa-solid text-pink-500' : 'fa-regular'} fa-heart"></i>`;
         }
 
@@ -1830,9 +2010,13 @@
         // Update Play Button Icon
         function updatePlayButtonState() {
             if (isPlaying) {
-                playPauseIcon.className = 'fa-solid fa-pause';
+                playPauseIcon.className = 'transport-icon fa-solid fa-pause';
+                playPauseIcon.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 4h4v16H6zM14 4h4v16h-4z"/></svg>';
+                document.getElementById('playPauseBtn').setAttribute('aria-label', 'Остановить воспроизведение');
             } else {
-                playPauseIcon.className = 'fa-solid fa-play ml-0.5';
+                playPauseIcon.className = 'transport-icon fa-solid fa-play ml-0.5';
+                playPauseIcon.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4v16l14-8z"/></svg>';
+                document.getElementById('playPauseBtn').setAttribute('aria-label', 'Начать воспроизведение');
             }
         }
 
@@ -1971,16 +2155,16 @@
 
         // MediaSession API & Next/Prev Station Controls
         function playNextStation() {
-            if (!currentStation || stations.length === 0) return;
-            const idx = stations.findIndex(s => s.stationuuid === currentStation.stationuuid);
+            if (stations.length === 0) return;
+            const idx = stations.findIndex(s => s.stationuuid === currentStation?.stationuuid);
             const next = stations[(idx + 1) % stations.length];
             if (next) playStation(next.stationuuid);
         }
 
         function playPrevStation() {
-            if (!currentStation || stations.length === 0) return;
-            const idx = stations.findIndex(s => s.stationuuid === currentStation.stationuuid);
-            const prev = stations[(idx - 1 + stations.length) % stations.length];
+            if (stations.length === 0) return;
+            const idx = stations.findIndex(s => s.stationuuid === currentStation?.stationuuid);
+            const prev = stations[idx < 0 ? stations.length - 1 : (idx - 1 + stations.length) % stations.length];
             if (prev) playStation(prev.stationuuid);
         }
 
