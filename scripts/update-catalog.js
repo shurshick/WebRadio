@@ -10,7 +10,7 @@ const API_MIRRORS = ['de1', 'nl1', 'at1'].map(host => `https://${host}.api.radio
 
 function download(url, timeout = 120000) {
     return new Promise((resolve, reject) => {
-        const request = https.get(url, { headers: { 'User-Agent': 'SonaraRadio-Catalog/2.6.0' } }, response => {
+        const request = https.get(url, { headers: { 'User-Agent': 'SonaraRadio-Catalog/2.6.1' } }, response => {
             if (response.statusCode !== 200) {
                 response.resume();
                 reject(new Error(`Catalog download failed: HTTP ${response.statusCode}`));
