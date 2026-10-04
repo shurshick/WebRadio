@@ -648,12 +648,10 @@
                 <i class="fa-solid fa-xmark text-lg"></i>
             </button>
             <div class="flex items-center space-x-3 mb-4">
-                <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-neon-cyan to-neon-blue flex items-center justify-center text-dark-900 font-bold text-xl">
-                    <i class="fa-solid fa-radio"></i>
-                </div>
+                <img id="aboutLogo" alt="Sonara Radio" class="w-10 h-10 object-contain" style="flex-shrink:0">
                 <div>
                     <h3 class="font-bold text-lg text-white">О приложении</h3>
-                    <p class="text-xs text-gray-400">Sonara Radio v2.6.1</p>
+                    <p class="text-xs text-gray-400">Sonara Radio v2.6.2</p>
                 </div>
             </div>
             <p class="text-sm text-gray-300 leading-relaxed mb-4">
@@ -2459,6 +2457,8 @@
                 if (h) h.src = LOGO_DATA_URL;
                 var f = document.getElementById('footerLogo');
                 if (f) f.src = LOGO_DATA_URL;
+                var about = document.getElementById('aboutLogo');
+                if (about) about.src = LOGO_DATA_URL;
                 var icon = document.querySelector('link[rel="icon"]');
                 if (!icon) {
                     icon = document.createElement('link');
